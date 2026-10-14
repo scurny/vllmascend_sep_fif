@@ -122,9 +122,9 @@ private:
     uint32_t prefetchCandidateMax_ = 0;
     uint32_t kEntryBytes_ = 0;
     uint32_t tokenSizeBytesK_ = 0;
-    TBufTPosition::VECCALC prefetchUbBuf_;
+    TBuf<TPosition::VECCALC> prefetchUbBuf_;
     LocalTensor<uint8_t> prefetchUbLocal_;
-    TBufTPosition::VECCALC cmpMaskBuf_;
+    TBuf<TPosition::VECCALC> cmpMaskBuf_;
     LocalTensor<uint8_t> cmpMaskUb_;
 
     // para for LD
@@ -368,10 +368,10 @@ __aicore__ inline void LIQVector<LIQT>::PrefetchScoresInVec1(
         
         // 3. GVA→UB: 先 K 再 V
         GlobalTensor<uint8_t> srcGmK;
-        srcGmK.SetGlobalBuffer(reinterpret_cast<**gm** uint8_t *>(gvaK));
+        srcGmK.SetGlobalBuffer(reinterpret_cast<__gm__ uint8_t *>(gvaK));
         AscendC::DataCopyPad(prefetchUbLocal_, srcGmK, copyParamsK, padParams);
         GlobalTensor<uint8_t> srcGmV;
-        srcGmV.SetGlobalBuffer(reinterpret_cast<**gm** uint8_t *>(gvaV));
+        srcGmV.SetGlobalBuffer(reinterpret_cast<__gm__ uint8_t *>(gvaV));
         AscendC::DataCopyPad(prefetchUbLocal_[tokenSizeBytesK_], srcGmV, copyParamsV, padParams);
         
         // 4. UB→Staging Buffer

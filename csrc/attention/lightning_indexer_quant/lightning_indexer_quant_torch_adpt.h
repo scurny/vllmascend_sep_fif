@@ -25,10 +25,10 @@ at::Tensor npu_lightning_indexer_quant(
     const c10::optional<at::Tensor> &block_table, int64_t query_quant_mode, int64_t key_quant_mode,
     c10::string_view layout_query, c10::string_view layout_key, int64_t sparse_count, int64_t sparse_mode,
     // ---- ECHO-style prefetch ----
-    const c10::optionalat::Tensor &token_gva_table,
-    const c10::optionalat::Tensor &prefetch_staging_buf,
-    const c10::optionalat::Tensor &prefetch_slot_counter,
-    const c10::optionalat::Tensor &token_to_prefetch_slot,
+    const c10::optional<at::Tensor> &token_gva_table,
+    const c10::optional<at::Tensor> &prefetch_staging_buf,
+    const c10::optional<at::Tensor> &prefetch_slot_counter,
+    const c10::optional<at::Tensor> &token_to_prefetch_slot,
     double ema_threshold, int64_t token_size_bytes_k)
 {
     std::string query_layout_str = std::string(layout_query);

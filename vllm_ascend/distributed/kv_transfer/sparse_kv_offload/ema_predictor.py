@@ -1,5 +1,5 @@
 import torch
-
+from typing import Optional
 
 class EMATopkPredictor:
     """EMA 预测 indexer 输出的第 k 大 score，用于触发 prefetch。
