@@ -23,7 +23,13 @@ at::Tensor npu_lightning_indexer_quant(
     const c10::optional<at::Tensor> &actual_seq_lengths_query,
     const c10::optional<at::Tensor> &actual_seq_lengths_key,
     const c10::optional<at::Tensor> &block_table, int64_t query_quant_mode, int64_t key_quant_mode,
-    c10::string_view layout_query, c10::string_view layout_key, int64_t sparse_count, int64_t sparse_mode)
+    c10::string_view layout_query, c10::string_view layout_key, int64_t sparse_count, int64_t sparse_mode,
+    // ---- ECHO-style prefetch ----
+    const c10::optionalat::Tensor &token_gva_table,
+    const c10::optionalat::Tensor &prefetch_staging_buf,
+    const c10::optionalat::Tensor &prefetch_slot_counter,
+    const c10::optionalat::Tensor &token_to_prefetch_slot,
+    double ema_threshold, int64_t token_size_bytes_k)
 {
     std::string query_layout_str = std::string(layout_query);
     std::string key_layout_str = std::string(layout_key);
@@ -56,23 +62,32 @@ at::Tensor npu_lightning_indexer_quant(
     char *query_layout_ptr = const_cast<char *>(query_layout_str.c_str());
     char *key_layout_ptr = const_cast<char *>(key_layout_str.c_str());
 
-    EXEC_NPU_CMD(aclnnLightningIndexerQuant, 
-                    query,
-                    key, 
-                    weights, 
-                    query_dequant_scale, 
-                    key_dequant_scale, 
-                    actual_seq_lengths_query, 
-                    actual_seq_lengths_key,
-                    block_table, 
-                    query_quant_mode, 
-                    key_quant_mode, 
-                    query_layout_ptr, 
-                    key_layout_ptr, 
-                    sparse_count, 
-                    sparse_mode,
-                    lightning_indexer_quant_output
-                );
+    //---- ECHO-style prefetch: 局部变量，避免 rvalue 绑定非 const 引用 ----
+    float ema_threshold_val = static_cast<float>(ema_threshold);
+    uint32_t token_size_bytes_k_val = static_cast<uint32_t>(token_size_bytes_k);
+    EXEC_NPU_CMD(aclnnLightningIndexerQuant,
+    query,
+    key,
+    weights,
+    query_dequant_scale,
+    key_dequant_scale,
+    actual_seq_lengths_query,
+    actual_seq_lengths_key,
+    block_table,
+    query_quant_mode,
+    key_quant_mode,
+    query_layout_ptr,
+    key_layout_ptr,
+    sparse_count,
+    sparse_mode,
+    token_gva_table,
+    prefetch_staging_buf,
+    prefetch_slot_counter,
+    token_to_prefetch_slot,
+    ema_threshold_val,
+    token_size_bytes_k_val,
+    lightning_indexer_quant_output
+    );
 
     return lightning_indexer_quant_output;
 

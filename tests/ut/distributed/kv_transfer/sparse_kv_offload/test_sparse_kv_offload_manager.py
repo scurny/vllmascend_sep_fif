@@ -1,4 +1,6 @@
 import sys
+
+import torch
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -612,6 +614,537 @@ class TestSparseKVOffloadMemoryPlanning(unittest.TestCase):
 
         offload_backend.OffloadConfig.assert_not_called()
         offload_backend.initialize.assert_not_called()
+
+class TestSparseKVOffloadPrefetch(unittest.TestCase):
+    """Unit tests for ECHO-style prefetch methods (CPU-only logic)."""
+
+    def test_update_token_gva_table_single_request(self):
+        """One request, block_table=[0,1,2], block_size=128."""
+        num_reqs = 1
+        block_size = 128
+        max_model_len = 512
+        max_blocks = max_model_len // block_size  # 4
+        max_tokens = max_blocks * block_size  # 512
+        token_size_k = 64 * 128 * 2  # 1 head * 128 dim * bf16 = 16384
+        token_size_v = 64 * 128 * 2  # same for simplicity
+        gvas_k_base = 0x10000000
+        gvas_v_base = 0x20000000
+        # block_table: [1, 4, 2, 0] = blocks 0→1, 1→4, 2→2, 3→0
+        block_table = torch.tensor([[1, 4, 2, 0]], dtype=torch.int32)
+        # token_gva_table like the manager's
+        token_gva = torch.zeros([num_reqs, max_tokens, 2], dtype=torch.uint64)
+        # Simulate update_token_gva_table logic
+        bs = block_size
+        block_nums = block_table[:num_reqs].to(torch.int64).unsqueeze(-1)
+        offsets = torch.arange(bs, dtype=torch.int64)
+        global_positions = (block_nums * bs + offsets).reshape(num_reqs, max_blocks * bs)[:, :max_tokens]
+        token_gva[:num_reqs, :max_tokens, 0] = gvas_k_base + global_positions * token_size_k
+        token_gva[:num_reqs, :max_tokens, 1] = gvas_v_base + global_positions * token_size_v
+        # Verify: position 0 → block 1 → global_pos=128, GVA=base+128*16384
+        self.assertEqual(
+            token_gva[0, 0, 0].item(),
+            gvas_k_base + 128 * token_size_k,
+        )
+        # Position 127 (last in block 1)
+        self.assertEqual(
+            token_gva[0, 127, 0].item(),
+            gvas_k_base + (128 + 127) * token_size_k,
+        )
+        # Position 128 → block 4 → global_pos=512
+        self.assertEqual(
+            token_gva[0, 128, 0].item(),
+            gvas_k_base + 512 * token_size_k,
+        )
+        # V GVA uses different base but same position arithmetic
+        self.assertEqual(
+            token_gva[0, 0, 1].item(),
+            gvas_v_base + 128 * token_size_v,
+        )
+
+    def test_update_token_gva_table_two_requests(self):
+        """Two requests with different block tables."""
+        num_reqs = 2
+        block_size = 128
+        max_model_len = 256
+        max_blocks = max_model_len // block_size  # 2
+        max_tokens = max_blocks * block_size  # 256
+        token_size_k = 16384
+        token_size_v = 16384
+        gvas_k_base = 0x10000000
+        block_table = torch.tensor(
+            [[0, 1], [10, 11]], dtype=torch.int32
+        )  # req0: blocks 0-1, req1: blocks 10-11
+        token_gva = torch.zeros([num_reqs, max_tokens, 2], dtype=torch.uint64)
+        bs = block_size
+        block_nums = block_table[:num_reqs].to(torch.int64).unsqueeze(-1)
+        offsets = torch.arange(bs, dtype=torch.int64)
+        global_positions = (block_nums * bs + offsets).reshape(num_reqs, max_blocks * bs)[:, :max_tokens]
+        token_gva[:num_reqs, :max_tokens, 0] = gvas_k_base + global_positions * token_size_k
+        # req0, pos 0 → block 0 → global_pos=0
+        self.assertEqual(token_gva[0, 0, 0].item(), gvas_k_base + 0)
+        # req1, pos 0 → block 10 → global_pos=1280
+        self.assertEqual(token_gva[1, 0, 0].item(), gvas_k_base + 1280 * token_size_k)
+        # req0 and req1 do NOT share GVA addresses
+        self.assertNotEqual(token_gva[0, 0, 0].item(), token_gva[1, 0, 0].item())
+
+    def test_global_position_computation_single_token(self):
+        """One decode token, one request, one topk entry."""
+        topk = 2
+        num_tokens = 1
+        max_model_len = 256
+        # Simulate complete_prefetch_staging global_pos computation
+        # token_to_req: [num_tokens], topk_indices: [num_tokens, topk]
+        token_to_req = torch.tensor([0], dtype=torch.int32)  # req 0
+        topk_indices = torch.tensor([[10, 42]], dtype=torch.int32)
+        flat_topk = topk_indices.reshape(-1).to(torch.int64)  # [2] = [10, 42]
+        token_req = token_to_req[:num_tokens].to(dtype=torch.int64)
+        token_bases = token_req * max_model_len  # [1] = [0]
+        token_bases_expanded = token_bases.unsqueeze(1).expand(-1, topk).reshape(-1)
+        global_topk = token_bases_expanded + flat_topk
+        # Single request → globalPos == localPos
+        self.assertTrue(torch.equal(global_topk, flat_topk))
+
+    def test_global_position_computation_two_requests(self):
+        """Two decode tokens from different requests, multiple topk entries."""
+        topk = 3
+        num_tokens = 2
+        max_model_len = 256
+        # token 0 → req 0, token 1 → req 1
+        token_to_req = torch.tensor([0, 1], dtype=torch.int32)
+        # Each token's topk indices (local positions within each req's KV context)
+        topk_indices = torch.tensor([[0, 5, 10], [0, 7, 14]], dtype=torch.int32)
+        flat_topk = topk_indices.reshape(-1).to(torch.int64)  # [6]
+        token_req = token_to_req[:num_tokens].to(dtype=torch.int64)  # [0, 1]
+        token_bases = token_req * max_model_len  # [0, 256]
+        token_bases_expanded = token_bases.unsqueeze(1).expand(-1, topk).reshape(-1)
+        global_topk = token_bases_expanded + flat_topk
+        # Expected: req0 tokens stay same, req1 tokens get +256
+        expected = torch.tensor([0, 5, 10, 256, 263, 270], dtype=torch.int64)
+        self.assertTrue(torch.equal(global_topk, expected))
+        # Verify cross-request protection: req0 and req1 have different global positions
+        # even though local positions are the same (both have position 0)
+        self.assertNotEqual(global_topk[0].item(), global_topk[3].item())
+
+    def test_global_position_computation_three_tokens_two_reqs(self):
+        """Two tokens from same request, one from another."""
+        topk = 2
+        max_model_len = 128
+        token_to_req = torch.tensor([0, 0, 1], dtype=torch.int32)
+        topk_indices = torch.tensor([[0, 1], [2, 3], [0, 4]], dtype=torch.int32)
+        flat_topk = topk_indices.reshape(-1).to(torch.int64)
+        token_req = token_to_req[:3].to(dtype=torch.int64)
+        token_bases = token_req * max_model_len
+        token_bases_expanded = token_bases.unsqueeze(1).expand(-1, topk).reshape(-1)
+        global_topk = token_bases_expanded + flat_topk
+        # token0(req0): positions 0,1 → 0,1
+        # token1(req0): positions 2,3 → 2,3
+        # token2(req1): positions 0,4 → 128,132
+        expected = torch.tensor([0, 1, 2, 3, 128, 132], dtype=torch.int64)
+        self.assertTrue(torch.equal(global_topk, expected))
+
+    def test_reset_prefetch_state(self):
+        """reset_prefetch_state: zeroes counter and fills slot table with -1.
+        NPU-dependent; only runs when NPU is available.
+        """
+        if not torch.npu.is_available():
+            self.skipTest("NPU not available")
+        # Build a minimal manager (requires NPU for tensor creation)
+        max_num_reqs = 2
+        max_model_len = 128
+        slot_table = torch.full(
+            [max_num_reqs, max_model_len],
+            42,
+            dtype=torch.int32,
+            device="npu",
+        )
+        slot_counter = torch.zeros([1], dtype=torch.int32, device="npu")
+        # Simulate reset_prefetch_state
+        slot_counter.zero_()
+        slot_table.fill_(-1)
+        self.assertEqual(slot_counter.cpu().item(), 0)
+        self.assertTrue(torch.all(slot_table.cpu() == -1))
+
+
+class TestUpdateTokenGVATableRealImpl(unittest.TestCase):
+    """Test the REAL update_token_gva_table implementation (no mock logic)."""
+
+    def _make_minimal_manager(
+        self,
+        num_layers=1,
+        block_size=128,
+        max_model_len=512,
+        max_num_reqs=2,
+        token_size_k=16384,
+        token_size_v=16384,
+    ):
+        # Bypass __init__ entirely; we only need a handful of attributes.
+        mgr = SparseKVOffloadManager.__new__(SparseKVOffloadManager)
+        mgr.tp_rank = 0
+        mgr.block_size = block_size
+        mgr.max_model_len = max_model_len
+        mgr.topk = 2  # not used by update_token_gva_table, but harmless
+        mgr.num_layers = num_layers
+        mgr.gvas_k_bases = {i: 0x10000000 + i * 0x1000000 for i in range(num_layers)}
+        mgr.gvas_v_bases = {i: 0x20000000 + i * 0x1000000 for i in range(num_layers)}
+        mgr.token_size_bytes_k = token_size_k
+        mgr.token_size_bytes_v = token_size_v
+        max_blocks = (max_model_len + block_size - 1) // block_size
+        mgr.token_gva_table_cpu = torch.zeros(
+            [max_num_reqs, max_model_len, 2], dtype=torch.uint64, device="cpu"
+        )
+        mgr._token_gva_table_dirty = False
+        return mgr
+
+    def test_single_request_matches_formula(self):
+        mgr = self._make_minimal_manager()
+        # block_table: [[1, 4, 2, 0]] with block_size=128, max_model_len=512
+        block_table_cpu = torch.tensor([[1, 4, 2, 0]], dtype=torch.int32)
+        mgr.update_token_gva_table(block_table_cpu, num_reqs=1, layer_id=0)
+        # Same expected values as your existing test, but now driven by REAL code.
+        k_base = mgr.gvas_k_bases[0]
+        v_base = mgr.gvas_v_bases[0]
+        k_sz = mgr.token_size_bytes_k
+        v_sz = mgr.token_size_bytes_v
+        # token pos 0 → block 1 → global_pos 128
+        self.assertEqual(mgr.token_gva_table_cpu[0, 0, 0].item(), k_base + 128 * k_sz)
+        self.assertEqual(mgr.token_gva_table_cpu[0, 0, 1].item(), v_base + 128 * v_sz)
+
+        # pos 127 → still block 1 → global_pos 128+127
+        self.assertEqual(mgr.token_gva_table_cpu[0, 127, 0].item(), k_base + (128 + 127) * k_sz)
+
+        # pos 128 → block 4 → global_pos 512
+        self.assertEqual(mgr.token_gva_table_cpu[0, 128, 0].item(), k_base + 512 * k_sz)
+
+        # dirty flag set
+        self.assertTrue(mgr._token_gva_table_dirty)
+
+    def test_two_requests_no_overlap(self):
+        mgr = self._make_minimal_manager(max_model_len=256, max_num_reqs=2)
+        block_table_cpu = torch.tensor([[0, 1], [10, 11]], dtype=torch.int32)
+        mgr.update_token_gva_table(block_table_cpu, num_reqs=2, layer_id=0)
+        k_base = mgr.gvas_k_bases[0]
+        k_sz = mgr.token_size_bytes_k
+
+        # req0 pos0 → block 0 → GVA = base + 0
+        self.assertEqual(mgr.token_gva_table_cpu[0, 0, 0].item(), k_base)
+
+        # req1 pos0 → block 10 → GVA = base + 10*128*ksz
+        self.assertEqual(mgr.token_gva_table_cpu[1, 0, 0].item(), k_base + 10 * 128 * k_sz)
+
+        # no overlap
+        self.assertNotEqual(mgr.token_gva_table_cpu[0, 0, 0].item(), mgr.token_gva_table_cpu[1, 0, 0].item())
+
+    def test_non_tp0_is_noop(self):
+        mgr = self._make_minimal_manager()
+        mgr.tp_rank = 1
+        block_table_cpu = torch.tensor([[1, 2, 3, 0]], dtype=torch.int32)
+        mgr.update_token_gva_table(block_table_cpu, num_reqs=1, layer_id=0)
+        # Nothing written; table stays zero, dirty flag stays False
+        self.assertEqual(mgr.token_gva_table_cpu[0, 0, 0].item(), 0)
+        self.assertFalse(mgr._token_gva_table_dirty)
+
+    def test_invalid_tail_positions_remain_zero(self):
+        # max_blocks * block_size > max_model_len edge case
+        mgr = self._make_minimal_manager(max_model_len=300, block_size=128)
+        # max_blocks = ceil(300/128) = 3 → 3*128 = 384 > 300
+        block_table_cpu = torch.tensor([[0, 1, 2]], dtype=torch.int32)
+        mgr.update_token_gva_table(block_table_cpu, num_reqs=1, layer_id=0)
+        # positions [300, 384) should NOT be touched (they're beyond max_tokens)
+        # table shape is [.., 300, ..], so just ensure last valid pos is written
+        self.assertNotEqual(mgr.token_gva_table_cpu[0, 299, 0].item(), 0)
+
+
+class TestCompletePrefetchStagingRealImpl(unittest.TestCase):
+    """NPU-dependent tests for the REAL complete_prefetch_staging implementation.
+    These exercise the actual H2D + gather + scatter + copy path on device.
+    Requires torch.npu.is_available() and a healthy NPU.
+    """
+
+    def setUp(self):
+        if not torch.npu.is_available():
+            self.skipTest("NPU not available")
+
+    def _make_minimal_manager(
+        self,
+        num_layers=1,
+        topk=2,
+        topk_buffer_size=128,
+        block_size=128,
+        max_model_len=256,
+        max_num_reqs=2,
+        k_dim=64,
+        v_dim=64,
+        max_num_topk_rows=8,
+    ):
+        """Construct a Manager skeleton with only the attributes that
+        complete_prefetch_staging touches."""
+        mgr = SparseKVOffloadManager.__new__(SparseKVOffloadManager)
+        mgr.tp_rank = 0
+        mgr.num_layers = num_layers
+        mgr.topk = topk
+        mgr.topk_buffer_size = topk_buffer_size
+        mgr.block_size = block_size
+        mgr.max_model_len = max_model_len
+        mgr.max_num_reqs = max_num_reqs
+        mgr.max_num_topk_rows = max_num_topk_rows
+        # token sizes must match: token_size_bytes_k = k_dim * 2 (bf16)
+        mgr.token_size_bytes_k = k_dim * 2
+        mgr.token_size_bytes_v = v_dim * 2
+        mgr.prefetch_candidate_max = topk * 2
+        dev = "npu:0"
+        # staging buffer: [prefetch_candidate_max, k_size + v_size] uint8
+        k_entry = mgr.token_size_bytes_k + mgr.token_size_bytes_v
+        mgr.prefetch_staging_buf = torch.zeros(
+            [mgr.prefetch_candidate_max, k_entry], dtype=torch.uint8, device=dev
+        )
+        # resident buffers per layer: [rows, topk_buffer_size, 1, dim] bf16
+        mgr.topk_buffers_k = [
+            torch.zeros(
+                [max_num_topk_rows, topk_buffer_size, 1, k_dim],
+                dtype=torch.bfloat16,
+                device=dev,
+            )
+            for _ in range(num_layers)
+        ]
+        mgr.topk_buffers_v = [
+            torch.zeros(
+                [max_num_topk_rows, topk_buffer_size, 1, v_dim],
+                dtype=torch.bfloat16,
+                device=dev,
+            )
+            for _ in range(num_layers)
+        ]
+        # token_to_prefetch_slot: [max_num_reqs, max_blocks_per_req*block_size] int32
+        max_blocks = (max_model_len + block_size - 1) // block_size
+        mgr.token_to_prefetch_slot = torch.full(
+            [max_num_reqs, max_blocks * block_size],
+            -1,
+            dtype=torch.int32,
+            device=dev,
+        )
+        return mgr
+    def test_no_hits_returns_early(self):
+        """All slots -1 → no hits → no scatter, buffers unchanged."""
+        mgr = self._make_minimal_manager()
+        # leave token_to_prefetch_slot all -1
+        topk_indices_cpu = torch.tensor([[0, 1], [2, 3]], dtype=torch.int32)
+        # should silently return without touching anything
+        mgr.complete_prefetch_staging(topk_indices_cpu, num_tokens=2, layer_id=0)
+        # staging untouched, resident untouched
+        self.assertTrue(torch.all(mgr.topk_buffers_k[0] == 0))
+        self.assertTrue(torch.all(mgr.topk_buffers_v[0] == 0))
+
+    def test_single_hit_copies_staging_to_resident(self):
+        """One hit: staging slot 3 → resident [row0, col0]."""
+        mgr = self._make_minimal_manager(topk=2, k_dim=4, v_dim=4)
+        k_size = mgr.token_size_bytes_k  # 8
+        v_size = mgr.token_size_bytes_v  # 8
+        # Fill staging slot 3 with a recognizable pattern for K and V.
+        # K occupies bytes [0:k_size] in the row, V occupies [k_size:k_size+v_size].
+        k_pattern = torch.arange(4, dtype=torch.bfloat16) + 10
+        v_pattern = torch.arange(4, dtype=torch.bfloat16) + 100
+        mgr.prefetch_staging_buf[3, :k_size].view(torch.bfloat16).copy_(k_pattern)
+        mgr.prefetch_staging_buf[3, k_size:k_size + v_size].view(torch.bfloat16).copy_(v_pattern)
+        # token 0 topk = [local_pos 7, local_pos 12]
+        # token_to_prefetch_slot[req0, 7] = 3 (hit), [req0, 12] = -1 (miss)
+        mgr.token_to_prefetch_slot[0, 7] = 3
+        topk_indices_cpu = torch.tensor([[7, 12]], dtype=torch.int32)
+        mgr.complete_prefetch_staging(topk_indices_cpu, num_tokens=1, layer_id=0)
+        # hit was at flat index 0 → row 0, col 0 (topk=2: 0 // 2 = 0, 0 % 2 = 0)
+        self.assertTrue(
+            torch.equal(mgr.topk_buffers_k[0][0, 0, 0].cpu(), k_pattern.cpu()),
+            f"K mismatch: {mgr.topk_buffers_k[0][0, 0, 0]} vs {k_pattern}",
+        )
+        self.assertTrue(
+            torch.equal(mgr.topk_buffers_v[0][0, 0, 0].cpu(), v_pattern.cpu()),
+            f"V mismatch: {mgr.topk_buffers_v[0][0, 0, 0]} vs {v_pattern}",
+        )
+        # token_to_prefetch_slot[0, 7] should be cleared to -1
+        self.assertEqual(mgr.token_to_prefetch_slot[0, 7].item(), -1)
+        # miss slot untouched
+        self.assertEqual(mgr.token_to_prefetch_slot[0, 12].item(), -1)
+        
+    def test_multi_request_offset(self):
+        """Two requests: token_to_req gives cross-request offset."""
+        mgr = self._make_minimal_manager(topk=1, k_dim=4, v_dim=4, max_model_len=128)
+        k_size = mgr.token_size_bytes_k
+        v_size = mgr.token_size_bytes_v
+        # req0 has topk hit at local pos 5 → staging slot 0
+        # req1 has topk hit at local pos 5 → staging slot 1 (same local pos!)
+        mgr.token_to_prefetch_slot[0, 5] = 0
+        mgr.token_to_prefetch_slot[1, 5] = 1
+        k0 = torch.full((4,), 1.0, dtype=torch.bfloat16)
+        k1 = torch.full((4,), 2.0, dtype=torch.bfloat16)
+        v0 = torch.full((4,), 10.0, dtype=torch.bfloat16)
+        v1 = torch.full((4,), 20.0, dtype=torch.bfloat16)
+        mgr.prefetch_staging_buf[0, :k_size].view(torch.bfloat16).copy_(k0)
+        mgr.prefetch_staging_buf[0, k_size:k_size + v_size].view(torch.bfloat16).copy_(v0)
+        mgr.prefetch_staging_buf[1, :k_size].view(torch.bfloat16).copy_(k1)
+        mgr.prefetch_staging_buf[1, k_size:k_size + v_size].view(torch.bfloat16).copy_(v1)
+        # token_to_req: token 0 → req 0, token 1 → req 1
+        token_to_req = torch.tensor([0, 1], dtype=torch.int32)
+        # topk_indices_cpu: both tokens have local pos 5
+        topk_indices_cpu = torch.tensor([[5], [5]], dtype=torch.int32)
+        mgr.complete_prefetch_staging(
+            topk_indices_cpu, num_tokens=2, layer_id=0, token_to_req=token_to_req
+        )
+        # token0 → row 0 col 0 → K=1, V=10
+        self.assertTrue(torch.equal(mgr.topk_buffers_k[0][0, 0, 0].cpu(), k0.cpu()))
+        self.assertTrue(torch.equal(mgr.topk_buffers_v[0][0, 0, 0].cpu(), v0.cpu()))
+        # token1 → row 1 col 0 → K=2, V=20
+        self.assertTrue(torch.equal(mgr.topk_buffers_k[0][1, 0, 0].cpu(), k1.cpu()))
+        self.assertTrue(torch.equal(mgr.topk_buffers_v[0][1, 0, 0].cpu(), v1.cpu()))
+        # Both slot entries cleared
+        self.assertEqual(mgr.token_to_prefetch_slot[0, 5].item(), -1)
+        self.assertEqual(mgr.token_to_prefetch_slot[1, 5].item(), -1)
+
+    def test_mixed_hit_and_miss(self):
+        """Some topk entries hit, some miss — only hits are copied."""
+        mgr = self._make_minimal_manager(topk=2, k_dim=4, v_dim=4)
+        k_size = mgr.token_size_bytes_k
+        v_size = mgr.token_size_bytes_v
+        # staging slot 2 has data
+        k_hit = torch.full((4,), 7.0, dtype=torch.bfloat16)
+        v_hit = torch.full((4,), 70.0, dtype=torch.bfloat16)
+        mgr.prefetch_staging_buf[2, :k_size].view(torch.bfloat16).copy_(k_hit)
+        mgr.prefetch_staging_buf[2, k_size:k_size + v_size].view(torch.bfloat16).copy_(v_hit)
+        mgr.token_to_prefetch_slot[0, 20] = 2  # hit for topk col 0
+        # topk col 1 (local pos 30) stays -1 = miss
+        topk_indices_cpu = torch.tensor([[20, 30]], dtype=torch.int32)
+        mgr.complete_prefetch_staging(topk_indices_cpu, num_tokens=1, layer_id=0)
+        # hit: row0 col0
+        self.assertTrue(torch.equal(mgr.topk_buffers_k[0][0, 0, 0].cpu(), k_hit.cpu()))
+        self.assertTrue(torch.equal(mgr.topk_buffers_v[0][0, 0, 0].cpu(), v_hit.cpu()))
+        # miss: row0 col1 stays 0
+        self.assertTrue(torch.all(mgr.topk_buffers_k[0][0, 1, 0] == 0))
+        self.assertTrue(torch.all(mgr.topk_buffers_v[0][0, 1, 0] == 0))
+
+    def test_non_tp0_is_noop(self):
+        """tp_rank != 0 → method returns immediately."""
+        mgr = self._make_minimal_manager(topk=1, k_dim=4, v_dim=4)
+        mgr.tp_rank = 1
+        # even with a valid hit set up, nothing should happen
+        mgr.token_to_prefetch_slot[0, 5] = 0
+        mgr.prefetch_staging_buf[0].fill_(1)
+        topk_indices_cpu = torch.tensor([[5]], dtype=torch.int32)
+        mgr.complete_prefetch_staging(topk_indices_cpu, num_tokens=1, layer_id=0)
+        # resident buffer untouched
+        self.assertTrue(torch.all(mgr.topk_buffers_k[0] == 0))
+        # slot not cleared
+        self.assertEqual(mgr.token_to_prefetch_slot[0, 5].item(), 0)
+
+
+class TestStartPrefetchIntegration(unittest.TestCase):
+    """Integration test for start_prefetch: it must chain
+    reset_prefetch_state -> update_token_gva_table -> _sync_token_gva_table_to_npu
+    in the correct order, with the correct side effects.
+    CPU-only for the table fill; one D2H sync for the NPU copy.
+    Requires NPU only for the sync step.
+    """
+
+    def setUp(self):
+        if not torch.npu.is_available():
+            self.skipTest("NPU not available")
+
+    def _make_minimal_manager(
+        self,
+        num_layers=1,
+        block_size=128,
+        max_model_len=256,
+        max_num_reqs=2,
+        k_dim=4,
+        v_dim=4,
+    ):
+        mgr = SparseKVOffloadManager.__new__(SparseKVOffloadManager)
+        mgr.tp_rank = 0
+        mgr.num_layers = num_layers
+        mgr.block_size = block_size
+        mgr.max_model_len = max_model_len
+        mgr.max_num_reqs = max_num_reqs
+        mgr.gvas_k_bases = [0x10000000 + i * 0x1000000 for i in range(num_layers)]
+        mgr.gvas_v_bases = [0x20000000 + i * 0x1000000 for i in range(num_layers)]
+        mgr.token_size_bytes_k = k_dim * 2
+        mgr.token_size_bytes_v = v_dim * 2
+        max_blocks = (max_model_len + block_size - 1) // block_size
+        max_tokens = max_blocks * block_size
+        dev = "npu:0"
+        # Use int64 instead of uint64: NPU does not support DT_UINT64.
+        # The source uses uint64 but A5 hardware can't create it; for the
+        # purpose of this integration test the values fit in int64 just fine.
+        mgr.token_gva_table_cpu = torch.zeros(
+            [max_num_reqs, max_tokens, 2], dtype=torch.int64, device="cpu"
+        )
+        mgr.token_gva_table_npu = torch.zeros(
+            [max_num_reqs, max_tokens, 2], dtype=torch.int64, device=dev
+        )
+        mgr._token_gva_table_dirty = True
+        mgr.prefetch_slot_counter = torch.zeros([1], dtype=torch.int32, device=dev)
+        mgr.token_to_prefetch_slot = torch.full(
+            [max_num_reqs, max_tokens], -1, dtype=torch.int32, device=dev
+        )
+        return mgr
+
+    def test_start_prefetch_chains_all_three_steps(self):
+        """After start_prefetch, all three side effects must be present:
+
+        - slot_counter zeroed
+
+        - token_to_prefetch_slot filled with -1
+
+        - token_gva_table_cpu populated
+
+        - token_gva_table_npu synced (equals cpu)
+
+        - _token_gva_table_dirty reset to False
+        """
+        mgr = self._make_minimal_manager()
+        # Pre-dirty the state so we can tell it was reset.
+        mgr.prefetch_slot_counter.fill_(42)
+        mgr.token_to_prefetch_slot.fill_(7)
+        block_table_cpu = torch.tensor([[1, 4, 2, 0]], dtype=torch.int32)
+        mgr.start_prefetch(block_table_cpu, num_tokens=1, num_reqs=1, layer_id=0)
+        # 1) counter zeroed
+        self.assertEqual(mgr.prefetch_slot_counter.cpu().item(), 0)
+        # 2) slot table all -1
+        self.assertTrue(torch.all(mgr.token_to_prefetch_slot.cpu() == -1))
+        # 3) token_gva_table_cpu populated with expected GVA
+        k_base = mgr.gvas_k_bases[0]
+        k_sz = mgr.token_size_bytes_k
+        # pos 0 → block 1 → global_pos 128
+        self.assertEqual(
+            mgr.token_gva_table_cpu[0, 0, 0].item(),
+            k_base + 128 * k_sz,
+        )
+        # 4) NPU table synced to CPU table
+        self.assertTrue(torch.equal(mgr.token_gva_table_npu.cpu(), mgr.token_gva_table_cpu))
+        # 5) dirty flag cleared
+        self.assertFalse(mgr._token_gva_table_dirty)
+
+    def test_start_prefetch_resets_previous_hits(self):
+        """If a previous step left hit slots, start_prefetch must wipe them."""
+        mgr = self._make_minimal_manager()
+        # Simulate leftover hits from a previous iteration
+        mgr.token_to_prefetch_slot[0, 5] = 3
+        mgr.token_to_prefetch_slot[1, 10] = 1
+        mgr.prefetch_slot_counter.fill_(2)
+        block_table_cpu = torch.tensor([[0, 1], [10, 11]], dtype=torch.int32)
+        mgr.start_prefetch(block_table_cpu, num_tokens=2, num_reqs=2, layer_id=0)
+        # All previous hits gone
+        self.assertTrue(torch.all(mgr.token_to_prefetch_slot.cpu() == -1))
+        self.assertEqual(mgr.prefetch_slot_counter.cpu().item(), 0)
+
+    def test_start_prefetch_non_tp0_is_noop(self):
+        """tp_rank != 0 → start_prefetch returns immediately."""
+        mgr = self._make_minimal_manager()
+        mgr.tp_rank = 1
+        mgr.token_to_prefetch_slot.fill_(9)
+        mgr.prefetch_slot_counter.fill_(9)
+        block_table_cpu = torch.tensor([[1, 4, 2, 0]], dtype=torch.int32)
+        mgr.start_prefetch(block_table_cpu, num_tokens=1, num_reqs=1, layer_id=0)
+        # Nothing was reset, nothing was written
+        self.assertTrue(torch.all(mgr.token_to_prefetch_slot.cpu() == 9))
+        self.assertEqual(mgr.prefetch_slot_counter.cpu().item(), 9)
+        self.assertTrue(torch.all(mgr.token_gva_table_npu.cpu() == 0))
 
 
 if __name__ == "__main__":

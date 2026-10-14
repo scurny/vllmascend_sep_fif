@@ -858,6 +858,103 @@ class SparseKVOffloadManager:
         self.dvas_k_bases = list(self.hvas_k_bases)
         self.dvas_v_bases = list(self.hvas_v_bases)
 
+    def reset_prefetch_state(self) -> None:
+        """Reset prefetch state before each kernel launch."""
+        self.prefetch_slot_counter.zero_()
+        self.token_to_prefetch_slot.fill_(-1)
+
+    def update_token_gva_table(
+        self,
+        block_table_cpu: torch.Tensor,
+        num_reqs: int,
+        layer_id: int,
+    ) -> None:
+        """Compute token_gva_table from block_table for the given layer."""
+        if not (self.tp_rank == 0 or self.rank_local_host_pool):
+            return
+        bs = self.block_size
+        max_blocks = block_table_cpu.shape[1]
+        max_tokens = min(max_blocks * bs, self.max_model_len)
+        dvas_k_base = self.dvas_k_bases[layer_id]
+        dvas_v_base = self.dvas_v_bases[layer_id]
+        block_nums = block_table_cpu[:num_reqs].to(torch.int64).unsqueeze(-1)
+        offsets = torch.arange(bs, dtype=torch.int64)
+        global_positions = (block_nums * bs + offsets).reshape(num_reqs, max_blocks * bs)[:, :max_tokens]
+        self.token_gva_table_cpu[:num_reqs, :max_tokens, 0] = (
+            dvas_k_base + global_positions * self.token_size_bytes_k
+        )
+        self.token_gva_table_cpu[:num_reqs, :max_tokens, 1] = (
+            dvas_v_base + global_positions * self.token_size_bytes_v
+        )
+        self._token_gva_table_dirty = True
+
+    def _sync_token_gva_table_to_npu(self) -> None:
+        """Copy token_gva_table from CPU to NPU if dirty."""
+        if self._token_gva_table_dirty:
+            self.token_gva_table_npu.copy_(self.token_gva_table_cpu, non_blocking=True)
+            self._token_gva_table_dirty = False
+
+    def start_prefetch(
+        self,
+        block_table: torch.Tensor,
+        num_tokens: int,
+        num_reqs: int,
+        layer_id: int,
+    ) -> None:
+        """Prepare prefetch state before indexer kernel launch."""
+        if not (self.tp_rank == 0 or self.rank_local_host_pool):
+            return
+        self.reset_prefetch_state()
+        self.update_token_gva_table(block_table, num_reqs, layer_id)
+        self._sync_token_gva_table_to_npu()
+
+    def complete_prefetch_staging(
+        self,
+        topk_indices_cpu: torch.Tensor,
+        num_tokens: int,
+        layer_id: int,
+        token_to_req: torch.Tensor | None = None,
+        capturing: bool = False,
+    ) -> None:
+        """After indexer kernel: copy prefetch hits from staging to resident."""
+        if not (self.tp_rank == 0 or self.rank_local_host_pool):
+            return
+        if self.num_layers == 0 or layer_id >= self.num_layers:
+            return
+        k_size = self.token_size_bytes_k
+        v_size = self.token_size_bytes_v
+        k_entry_bytes = k_size + v_size
+        if k_entry_bytes == 0:
+            return
+        staging = self.prefetch_staging_buf
+        topk_k = self.topk_buffers_k[layer_id]
+        topk_v = self.topk_buffers_v[layer_id]
+        topk_indices_npu = topk_indices_cpu[:num_tokens].to("npu", non_blocking=True)
+        flat_slots = self.token_to_prefetch_slot.view(-1)
+        flat_topk = topk_indices_npu.reshape(-1).to(torch.int64)
+        if token_to_req is not None:
+            token_req = token_to_req[:num_tokens].to(device="npu", dtype=torch.int64, non_blocking=True)
+            token_bases = token_req * self.max_model_len
+            token_bases_expanded = token_bases.unsqueeze(1).expand(-1, self.topk).reshape(-1)
+            global_topk = token_bases_expanded + flat_topk
+        else:
+            global_topk = flat_topk
+        hit_slots = flat_slots[global_topk]
+        hit_mask = hit_slots >= 0
+        num_hits = int(torch.sum(hit_mask).item())
+        if num_hits == 0:
+            return
+        hit_linear = torch.where(hit_mask)[0]
+        hit_rows = hit_linear // self.topk
+        hit_cols = hit_linear % self.topk
+        hit_slot_values = hit_slots[hit_linear]
+        staging_k = staging[:, :k_size].view(topk_k.dtype).reshape(self.prefetch_candidate_max, -1)
+        staging_v = staging[:, k_size:].view(topk_v.dtype).reshape(self.prefetch_candidate_max, -1)
+        if not capturing:
+            topk_k[hit_rows, hit_cols, 0] = staging_k[hit_slot_values]
+            topk_v[hit_rows, hit_cols, 0] = staging_v[hit_slot_values]
+        flat_slots[global_topk[hit_linear]] = -1
+
     def _initialize_simt_lru_backend(self, device: torch.device) -> None:
         host_num_blocks = int(self.k_caches_cpu[0].shape[0])
         for layer_id, (k_cache, v_cache) in enumerate(zip(self.k_caches_cpu, self.v_caches_cpu)):
@@ -972,6 +1069,36 @@ class SparseKVOffloadManager:
         self.addr_k_bases: list[int] = [t.data_ptr() for t in self.topk_buffers_k]
         self.addr_v_bases: list[int] = [t.data_ptr() for t in self.topk_buffers_v]
         self._initialize_pool_address_tables()
+        # ============ ECHO-style prefetch buffer ============
+        # A5 不支持 uint64，用 int64（地址值域够用）
+        _prefetch_max_blocks = cdiv(self.max_model_len, self.block_size)
+        self.token_gva_table_cpu = torch.zeros(
+            [self.max_num_reqs, _prefetch_max_blocks * self.block_size, 2],
+            dtype=torch.int64,
+            device="cpu",
+            pin_memory=True,
+        )
+        self.token_gva_table_npu = torch.zeros_like(
+            self.token_gva_table_cpu, device=device
+        )
+        self._token_gva_table_dirty = True
+        self.prefetch_candidate_max = self.topk * 2
+        kv_entry_bytes_combined = self.token_size_bytes_k + self.token_size_bytes_v
+        self.prefetch_staging_buf = torch.zeros(
+            [self.prefetch_candidate_max, kv_entry_bytes_combined],
+            dtype=torch.uint8,
+            device=device,
+        )
+        self.prefetch_slot_counter = torch.zeros(
+            [1], dtype=torch.int32, device=device
+        )
+        self.token_to_prefetch_slot = torch.full(
+            [self.max_num_reqs, _prefetch_max_blocks * self.block_size],
+            -1,
+            dtype=torch.int32,
+            device=device,
+        )
+        # ====================================================
         if self.rank_local_host_pool:
             self._initialize_simt_lru_backend(device)
             return

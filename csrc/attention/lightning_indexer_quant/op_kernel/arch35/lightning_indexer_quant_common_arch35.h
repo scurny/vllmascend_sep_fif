@@ -106,6 +106,12 @@ struct ConstInfo {
     uint32_t actualLenDims = 0U;   // KV 的actualSeqLength 的维度
     bool isAccumSeqS1 = false;     // 是否累加模式
     bool isAccumSeqS2 = false;     // 是否累加模式
+
+    // ---- ECHO-style prefetch ----
+    float emaThreshold = 0.0f;         // EMA 预测阈值，≤0 时不触发 prefetch
+    uint32_t prefetchCandidateMax = 0; // 最大候选 token 数
+    uint32_t kEntryBytes = 0;          // 单 token KV 字节数 (K+V)
+    uint32_t tokenSizeBytesK = 0;      // 单 token K 字节数 (用于查 token_gva_table K/V 分拆)
 };
 
 struct SplitCoreInfo {

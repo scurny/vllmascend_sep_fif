@@ -440,7 +440,12 @@ class AscendSFAIndexerBackend(nn.Module, AttentionBackend):
             q_li, q_li_scale = torch_npu.npu_dynamic_quant(q_li.view(-1, self.head_dim), dst_type=self.c8_k_cache_dtype)
             q_li_scale = q_li_scale.to(self.c8_k_scale_cache_dtype)  # [b*s,]
 
-        return DeviceOperator.indexer_select_post_process(
+        # 读取 _injected_ema_threshold (由 AscendSFAKVOffloadImpl 在 kernel 前注入)
+        ema_threshold = getattr(self, "_injected_ema_threshold", None)
+        # 使用后清除，避免多 layer 共享 indexer 时残留
+        if ema_threshold is not None:
+            self._injected_ema_threshold = None
+        topk_indices, topk_values = DeviceOperator.indexer_select_post_process(
             q_li,
             q_li_scale,
             q_li_shape_ori,
@@ -453,7 +458,12 @@ class AscendSFAIndexerBackend(nn.Module, AttentionBackend):
             indexer_metadata.actual_seq_lengths_key,
             self.enable_sparse_li_c8,
             self.use_torch_npu_lightning_indexer,
+            ema_threshold=ema_threshold or 0.0,
         )
+        # 保存 topk_values 供 ECHO-style prefetch EMA 阈值更新，
+        # AscendSFAKVOffloadImpl 在 _execute_sparse_flash_attention_process 中读取.
+        self._last_topk_values = topk_values
+        return topk_indices
 
 
 class AscendSFAIndexerMetadataBuilder(AttentionMetadataBuilder[AscendSFAIndexerMetadata]):

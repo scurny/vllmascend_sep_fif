@@ -20,8 +20,8 @@
 #include "kernel_tiling/kernel_tiling.h"
 #include "lib/matmul_intf.h"
 #include "lib/matrix/matmul/tiling.h"
-#include "lightning_indexer_quant_common.h"
-#include "lightning_indexer_quant_vector.h"
+#include "lightning_indexer_quant_common_arch35.h"
+#include "lightning_indexer_quant_vector_arch35.h"
 
 namespace LIQKernel {
 using namespace LIQCommon;
@@ -52,6 +52,14 @@ public:
     __aicore__ inline void InitVecInputTensor(GlobalTensor<half> weightsGm, GlobalTensor<half> qScaleGm,
                                               GlobalTensor<half> kScaleGm, GlobalTensor<int32_t> indiceOutGm,
                                               GlobalTensor<int32_t> blockTableGm);
+    // ---- ECHO-style prefetch ----
+    __aicore__ inline void InitPrefetchTensors(GlobalTensor<uint64_t> tokenGvaTableGm,
+                                               GlobalTensor<uint8_t> prefetchStagingBufGm,
+                                               GlobalTensor<int32_t> prefetchSlotCounterGm,
+                                               GlobalTensor<int32_t> tokenToPrefetchSlotGm);
+    __aicore__ inline void PrefetchScoresInVec1(const LocalTensor<float> &scoresUb,
+                                                const LIQCommon::RunInfo &info,
+                                                uint32_t cuS2Len, uint32_t cuBaseS2Idx);
     __aicore__ inline void CleanInvalidOutput(int64_t invalidS1offset);
     __aicore__ inline void AllocEventID();
     __aicore__ inline void FreeEventID();
@@ -67,6 +75,11 @@ protected:
     GlobalTensor<half> vec0OutGm;
     GlobalTensor<int32_t> indiceOutGm;
     GlobalTensor<int32_t> blockTableGm;
+    // ---- ECHO-style prefetch GM tensors ----
+    GlobalTensor<uint64_t> tokenGvaTableGm_;
+    GlobalTensor<uint8_t> prefetchStagingBufGm_;
+    GlobalTensor<int32_t> prefetchSlotCounterGm_;
+    GlobalTensor<int32_t> tokenToPrefetchSlotGm_;
     // =================================常量区=================================
 
 private:
@@ -105,6 +118,14 @@ private:
     int32_t s2BaseSize_ = 0;
     int32_t kCacheBlockSize_ = 0;
     int32_t maxBlockNumPerBatch_ = 0;
+    // ---- ECHO-style prefetch ----
+    uint32_t prefetchCandidateMax_ = 0;
+    uint32_t kEntryBytes_ = 0;
+    uint32_t tokenSizeBytesK_ = 0;
+    TBufTPosition::VECCALC prefetchUbBuf_;
+    LocalTensor<uint8_t> prefetchUbLocal_;
+    TBufTPosition::VECCALC cmpMaskBuf_;
+    LocalTensor<uint8_t> cmpMaskUb_;
 
     // para for LD
     uint32_t mrgListNum_ = 4;
@@ -194,6 +215,13 @@ __aicore__ inline void LIQVector<LIQT>::InitBuffers(TPipe *pipe)
                 {1, static_cast<uint16_t>((s1BaseSize_ / 2) * 2 * paramNum_ * sizeof(int64_t)), 0, 0});
     SetWaitFlag<HardEvent::MTE3_V>(HardEvent::MTE3_V);
     outQueue_.FreeTensor(tmpfBuff);
+    // ---- ECHO-style prefetch UB buffer ----
+    if (prefetchCandidateMax_ > 0 && kEntryBytes_ > 0) {
+        pipe->InitBuffer(prefetchUbBuf_, kEntryBytes_);
+        prefetchUbLocal_ = prefetchUbBuf_.Get<uint8_t>();
+        pipe->InitBuffer(cmpMaskBuf_, 32);
+        cmpMaskUb_ = cmpMaskBuf_.Get<uint8_t>();
+    }
 }
 
 template <typename LIQT>
@@ -223,6 +251,10 @@ __aicore__ inline void LIQVector<LIQT>::InitParams(const struct LIQCommon::Const
     kCacheBlockSize_ = constInfo.kCacheBlockSize;
     maxBlockNumPerBatch_ = constInfo.maxBlockNumPerBatch;
     blockId_ = GetBlockIdx();
+    // ---- ECHO-style prefetch ----
+    prefetchCandidateMax_ = constInfo.prefetchCandidateMax;
+    kEntryBytes_ = constInfo.kEntryBytes;
+    tokenSizeBytesK_ = constInfo.tokenSizeBytesK;
 }
 
 template <typename LIQT>
@@ -248,6 +280,105 @@ __aicore__ inline void LIQVector<LIQT>::InitVecWorkspaceTensor(GlobalTensor<half
     this->vec1ResGm = vec1ResGm;
     this->vec0OutGm = vec0OutGm;
     this->vec1ParamGm = vec1ParamGm;
+}
+
+template <typename LIQT>
+__aicore__ inline void LIQVector<LIQT>::InitPrefetchTensors(
+    GlobalTensor<uint64_t> tokenGvaTableGm, GlobalTensor<uint8_t> prefetchStagingBufGm,
+    GlobalTensor<int32_t> prefetchSlotCounterGm, GlobalTensor<int32_t> tokenToPrefetchSlotGm)
+{
+    this->tokenGvaTableGm_ = tokenGvaTableGm;
+    this->prefetchStagingBufGm_ = prefetchStagingBufGm;
+    this->prefetchSlotCounterGm_ = prefetchSlotCounterGm;
+    this->tokenToPrefetchSlotGm_ = tokenToPrefetchSlotGm;
+}
+
+template <typename LIQT>
+__aicore__ inline void LIQVector<LIQT>::PrefetchScoresInVec1(
+    const LocalTensor<float> &scoresUb, const LIQCommon::RunInfo &info,
+    uint32_t cuS2Len, uint32_t cuBaseS2Idx)
+{
+    // 仅 emaThreshold > 0 且 prefetch 输入已提供时触发 prefetch
+    if (constInfo_.emaThreshold <= 0.0f || prefetchCandidateMax_ == 0 || kEntryBytes_ == 0) {
+        return;
+    }
+
+    if (cuS2Len == 0) {
+        return;
+    }
+
+    //---- Per-core slot range: 每个 AIV 核心拥有独占的 slot 区间 ----
+    int32_t numCores = AscendC::GetBlockNum () * 2;  // AIV 核数 = AIC * 2
+    int32_t slotsPerCore = prefetchCandidateMax_ / numCores;
+
+    if (slotsPerCore <= 0) {
+        return;
+    }
+
+    int32_t coreSlotBase = blockId_ * slotsPerCore;
+    int32_t coreSlotEnd = coreSlotBase + slotsPerCore;
+    int32_t localSlot = coreSlotBase;
+
+    // CompareScalar: scoresUb > emaThreshold → bitmask
+    uint32_t cmpLenAlign = LIQCommon::Align(cuS2Len, (uint32_t)32);
+    AscendC::CompareScalar(cmpMaskUb_, scoresUb, static_cast<float>(constInfo_.emaThreshold),
+    AscendC::CMPMODE::GT, cmpLenAlign);
+
+    // 收集超过阈值的 position
+    uint32_t validInRow = 0;
+    uint32_t bitPositions [256];  //s2BaseSize 上限 2048, 但单次 cuS2Len <= 2048
+    for (uint32_t j = 0; j < cuS2Len; j++) {
+        if ((cmpMaskUb_.GetValue(j / 8) >> (j % 8)) & 1) {
+            bitPositions[validInRow++] = j;
+        }
+    }
+
+    if (validInRow == 0) {
+        return;
+    }
+
+    // 检查核内 slot capacity
+    int32_t slotStart = localSlot;
+    localSlot += static_cast<int32_t>(validInRow);
+
+    if (slotStart + static_cast<int32_t>(validInRow) > coreSlotEnd) {
+        return;  // 放弃这行
+    }
+
+    //---- 跨 request 偏移: tokenGvaTable/tokenToPrefetchSlot layout 为 [num_reqs, max_tokens, *] ----
+    int64_t reqTokenBase = static_cast<int64_t>(info.bIdx) * static_cast<int64_t>(constInfo_.kSeqSize);
+    uint32_t tokenSizeBytesV = kEntryBytes_ - tokenSizeBytesK_;
+    AscendC::DataCopyPadExtParams<uint8_t> padParams{false, 0, 0, 0};
+    AscendC::DataCopyExtParams copyParamsK(1, tokenSizeBytesK_, 0, 0, 0);
+    AscendC::DataCopyExtParams copyParamsV(1, tokenSizeBytesV, 0, 0, 0);
+    AscendC::DataCopyExtParams copyParamsFull(1, kEntryBytes_, 0, 0, 0);
+
+    // 逐 token: 两次 GVA 查表 + 两次 DataCopyPad (K/V 分拆，MTE 流水线)
+    for (uint32_t k = 0; k < validInRow; k++) {
+        int64_t kvPos = cuBaseS2Idx + static_cast<int64_t>(bitPositions[k]);
+        int64_t globalPos = reqTokenBase + kvPos;
+        int32_t slot = slotStart + static_cast<int32_t>(k);
+
+        // 1. 从 tokenGvaTable 读取 K/V 两个 GVA 地址 (layout: [num_reqs, max_tokens, 2])
+        uint64_t gvaK = tokenGvaTableGm_.GetValue(static_cast<uint64_t>(globalPos) * 2);
+        uint64_t gvaV = tokenGvaTableGm_.GetValue(static_cast<uint64_t>(globalPos) * 2 + 1);
+        
+        // 2. 写 token→slot 映射
+        tokenToPrefetchSlotGm_.SetValue(static_cast<uint64_t>(globalPos), slot);
+        
+        // 3. GVA→UB: 先 K 再 V
+        GlobalTensor<uint8_t> srcGmK;
+        srcGmK.SetGlobalBuffer(reinterpret_cast<**gm** uint8_t *>(gvaK));
+        AscendC::DataCopyPad(prefetchUbLocal_, srcGmK, copyParamsK, padParams);
+        GlobalTensor<uint8_t> srcGmV;
+        srcGmV.SetGlobalBuffer(reinterpret_cast<**gm** uint8_t *>(gvaV));
+        AscendC::DataCopyPad(prefetchUbLocal_[tokenSizeBytesK_], srcGmV, copyParamsV, padParams);
+        
+        // 4. UB→Staging Buffer
+        AscendC::DataCopyPad(
+        prefetchStagingBufGm_[static_cast<uint64_t>(slot) * static_cast<uint64_t>(kEntryBytes_)],
+        prefetchUbLocal_, copyParamsFull);
+    }
 }
 
 template <typename LIQT>
@@ -382,6 +513,8 @@ __aicore__ inline void LIQVector<LIQT>::ProcessVec1(const LIQCommon::RunInfo &in
             PipeBarrier<PIPE_V>();
             AscendC::Mul(mmInUb, mmInUb, kScaleUb, cuS2Len);
             PipeBarrier<PIPE_V>();
+            //---- ECHO-style prefetch: 对当前 S1 行的 scores 做 threshold 比较并触发 H2D ----
+            PrefetchScoresInVec1(mmInUb, info, cuS2Len, cuBaseS2Idx);
             LocalTensor<float> sortBuff = tmpBuf_.Get<float>();
             LocalTensor<float> sortScoreUb = sortBuff;
             LocalTensor<float> sortIndiceUb = sortBuff[cuS2LenVecAlign];

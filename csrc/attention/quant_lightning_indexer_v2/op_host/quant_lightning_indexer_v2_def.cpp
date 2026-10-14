@@ -78,6 +78,27 @@ public:
             .DataTypeList({ge::DT_INT32})
             .FormatList({ge::FORMAT_ND})
             .AutoContiguous();
+        // ---- ECHO-style prefetch inputs (OPTIONAL) ----
+        this->Input("token_gva_table")
+            .ParamType(OPTIONAL)
+            .DataTypeList({ge::DT_UINT64})
+            .FormatList({ge::FORMAT_ND})
+            .AutoContiguous();
+        this->Input("prefetch_staging_buf")
+            .ParamType(OPTIONAL)
+            .DataTypeList({ge::DT_UINT8})
+            .FormatList({ge::FORMAT_ND})
+            .AutoContiguous();
+        this->Input("prefetch_slot_counter")
+            .ParamType(OPTIONAL)
+            .DataTypeList({ge::DT_INT32})
+            .FormatList({ge::FORMAT_ND})
+            .AutoContiguous();
+        this->Input("token_to_prefetch_slot")
+            .ParamType(OPTIONAL)
+            .DataTypeList({ge::DT_INT32})
+            .FormatList({ge::FORMAT_ND})
+            .AutoContiguous();
         this->Output("sparse_indices").ParamType(REQUIRED).DataTypeList({ge::DT_INT32}).FormatList({ge::FORMAT_ND});
         this->Output("sparse_values").ParamType(REQUIRED).DataTypeList({ge::DT_BF16}).FormatList({ge::FORMAT_ND});
         this->Output("candidate_topk_index_out").ParamType(OPTIONAL).DataTypeList({ge::DT_INT32}).FormatList({ge::FORMAT_ND});
@@ -94,6 +115,8 @@ public:
         this->Attr("candidate_block_size").AttrType(OPTIONAL).Int(8);        // 候选块大小(位置数)
         this->Attr("key_stride0").AttrType(OPTIONAL).Int(0);                 // A11: key 第0维 stride (0=紧凑; aclnn 动态调用下 tiling 拿不到 tensor stride, 由 csrc 自动传入)
         this->Attr("key_dequant_scale_stride0").AttrType(OPTIONAL).Int(0);   // A11: k_scale 第0维 stride
+        // ---- ECHO-style prefetch attr ----
+        this->Attr ("ema_threshold").AttrType (OPTIONAL).Float (0.0f); // EMA 预测阈值，0.0 = 不触发 prefetch
         OpAICoreConfig aicore_config;
         aicore_config.DynamicCompileStaticFlag(true)
             .DynamicFormatFlag(true)
@@ -167,6 +190,32 @@ public:
             .FormatList({ge::FORMAT_ND})
             .AutoContiguous();
         aicore_config_95.Input("metadata")
+            .ParamType(OPTIONAL)
+            .DataTypeList({ge::DT_INT32})
+            .FormatList({ge::FORMAT_ND})
+            .AutoContiguous();
+        aicore_config_95.Input("candidate_topk_index")
+            .ParamType(OPTIONAL)
+            .DataTypeList({ge::DT_INT32})
+            .FormatList({ge::FORMAT_ND})
+            .AutoContiguous();
+        // ---- ECHO-style prefetch inputs (OPTIONAL, A5 950) ----
+        aicore_config_95.Input("token_gva_table")
+            .ParamType(OPTIONAL)
+            .DataTypeList({ge::DT_UINT64})
+            .FormatList({ge::FORMAT_ND})
+            .AutoContiguous();
+        aicore_config_95.Input("prefetch_staging_buf")
+            .ParamType(OPTIONAL)
+            .DataTypeList({ge::DT_UINT8})
+            .FormatList({ge::FORMAT_ND})
+            .AutoContiguous();
+        aicore_config_95.Input("prefetch_slot_counter")
+            .ParamType(OPTIONAL)
+            .DataTypeList({ge::DT_INT32})
+            .FormatList({ge::FORMAT_ND})
+            .AutoContiguous();
+        aicore_config_95.Input("token_to_prefetch_slot")
             .ParamType(OPTIONAL)
             .DataTypeList({ge::DT_INT32})
             .FormatList({ge::FORMAT_ND})

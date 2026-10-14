@@ -15,7 +15,7 @@
 
 #include "kernel_operator.h"
 #include "lib/matmul_intf.h"
-#include "lightning_indexer_quant_kernel.h"
+#include "arch35/lightning_indexer_quant_kernel_arch35.h"
 #include "lightning_indexer_quant_template_tiling_key.h"
 
 using namespace LIQKernel;
@@ -26,7 +26,8 @@ using namespace LIQKernel;
         GET_TILING_DATA_WITH_STRUCT(LIQTilingData, tiling_data_in, tiling);                                  \
         const LIQTilingData *__restrict tiling_data = &tiling_data_in;                                       \
         op.Init(query, key, weights, queryScale, keyScale, actualSeqLengthsQ, actualSeqLengthsK, blocktable, \
-                sparseIndices, user, tiling_data, &tPipe);                                                   \
+                sparseIndices, user, tiling_data, &tPipe,                                                    \
+                tokenGvaTable, prefetchStagingBuf, prefetchSlotCounter, tokenToPrefetchSlot);                \
         op.Process();                                                                                        \
     } while (0)
 
@@ -35,10 +36,14 @@ __global__ __aicore__ void lightning_indexer_quant(__gm__ uint8_t *query, __gm__
                                                    __gm__ uint8_t *queryScale, __gm__ uint8_t *keyScale,
                                                    __gm__ uint8_t *actualSeqLengthsQ, __gm__ uint8_t *actualSeqLengthsK,
                                                    __gm__ uint8_t *blocktable, __gm__ uint8_t *sparseIndices,
-                                                   __gm__ uint8_t *workspace, __gm__ uint8_t *tiling)
+                                                   __gm__ uint8_t *workspace, __gm__ uint8_t *tiling,
+                                                   __gm__ uint8_t *tokenGvaTable = nullptr,
+                                                   __gm__ uint8_t *prefetchStagingBuf = nullptr,
+                                                   __gm__ uint8_t *prefetchSlotCounter = nullptr,
+                                                   __gm__ uint8_t *tokenToPrefetchSlot = nullptr)
 {
-#if (__CCE_AICORE__ == 310) || (defined __DAV_310R6__) || (__CCE_AICORE__ == 200)
-
+#if (__CCE_AICORE__ == 200)
+    // A2 不编
 #else
     TPipe tPipe;
     __gm__ uint8_t *user = GetUserWorkspace(workspace);

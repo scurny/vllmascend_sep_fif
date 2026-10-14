@@ -52,6 +52,11 @@ constexpr uint32_t KEY_DEQUANT_SCALE_INDEX = 4;
 constexpr uint32_t ACTUAL_SEQ_Q_INDEX = 5;
 constexpr uint32_t ACTUAL_SEQ_K_INDEX = 6;
 constexpr uint32_t BLOCK_TABLE_INDEX = 7;
+//---- ECHO-style prefetch inputs ----
+constexpr uint32_t TOKEN_GVA_TABLE_INDEX = 8;           //token GVA 地址表
+constexpr uint32_t PREFETCH_STAGING_BUF_INDEX = 9;      //prefetch staging buffer
+constexpr uint32_t PREFETCH_SLOT_COUNTER_INDEX = 10;    //prefetch slot 原子计数器
+constexpr uint32_t TOKEN_TO_PREFETCH_SLOT_INDEX = 11;   //token→prefetch_slot 映射
 constexpr uint32_t LIGHTNING_INDEXER_QUANT = 0;
 // Attributes Index
 constexpr uint32_t ATTR_QUERY_QUANT_MODE_INDEX = 0;
@@ -60,6 +65,9 @@ constexpr uint32_t ATTR_QUERY_LAYOUT_INDEX = 2;
 constexpr uint32_t ATTR_KEY_LAYOUT_INDEX = 3;
 constexpr uint32_t ATTR_SPARSE_COUNT_INDEX = 4;
 constexpr uint32_t ATTR_SPARSE_MODE_INDEX = 5;
+//---- ECHO-style prefetch attr ----
+constexpr uint32_t ATTR_EMA_THRESHOLD_INDEX = 6;        // EMA 预测阈值
+constexpr uint32_t ATTR_TOKEN_SIZE_BYTES_K_INDEX = 7;   // 单 token K 字节数
 // Dim Index
 constexpr uint32_t DIM_IDX_ZERO = 0;
 constexpr uint32_t DIM_IDX_ONE = 1;
@@ -89,6 +97,11 @@ TILING_DATA_FIELD_DEF(uint32_t, usedCoreNum)
 TILING_DATA_FIELD_DEF(uint32_t, blockSize)
 TILING_DATA_FIELD_DEF(uint32_t, maxBlockNumPerBatch)
 TILING_DATA_FIELD_DEF(uint32_t, sparseMode)
+//---- ECHO-style prefetch ----
+TILING_DATA_FIELD_DEF (float, emaThreshold)
+TILING_DATA_FIELD_DEF (uint32_t, prefetchCandidateMax)
+TILING_DATA_FIELD_DEF (uint32_t, kEntryBytes)
+TILING_DATA_FIELD_DEF (uint32_t, tokenSizeBytesK)
 END_TILING_DATA_DEF
 REGISTER_TILING_DATA_CLASS(LightningIndexerQuant, LIQTilingData)
 
@@ -105,6 +118,11 @@ struct LIQParaInfo {
     TilingOptionalParaInfo actualSeqLengthsQ = {nullptr, nullptr};
     TilingOptionalParaInfo actualSeqLengthsK = {nullptr, nullptr};
     TilingOptionalParaInfo blockTable = {nullptr, nullptr};
+    // ---- ECHO-style prefetch optional inputs ----
+    TilingOptionalParaInfo tokenGvaTable = {nullptr, nullptr};
+    TilingOptionalParaInfo prefetchStagingBuf = {nullptr, nullptr};
+    TilingOptionalParaInfo prefetchSlotCounter = {nullptr, nullptr};
+    TilingOptionalParaInfo tokenToPrefetchSlot = {nullptr, nullptr};
     TilingRequiredParaInfo attenOut = {nullptr, nullptr};
 
     const int32_t *queryQuantMode = nullptr;
@@ -114,6 +132,9 @@ struct LIQParaInfo {
     const int32_t *blockSize = nullptr;
     const int32_t *sparseMode = nullptr;
     const int32_t *sparseCount = nullptr;
+    // ---- ECHO-style prefetch attr ----
+    const float *emaThreshold = nullptr;
+    const uint32_t *tokenSizeBytesK = nullptr;
 };
 
 // -----------算子Tiling入参信息类---------------
@@ -139,6 +160,11 @@ public:
     int32_t sparseMode = 0;
     // Others Flag
     uint32_t sparseCount = 0;
+    // ---- ECHO-style prefetch ----
+    float emaThreshold = 0.0f;
+    uint32_t prefetchCandidateMax = 0;
+    uint32_t kEntryBytes = 0;
+    uint32_t tokenSizeBytesK = 0;
     // DType
     ge::DataType inputQType = ge::DT_FLOAT16;
     ge::DataType inputKType = ge::DT_FLOAT16;

@@ -16,7 +16,7 @@
 #define LIGHTNING_INDEXER_QUANT_VECTOR_H
 
 #include "kernel_operator.h"
-#include "lightning_indexer_quant_vector.h"
+#include "lightning_indexer_quant_vector_arch35.h"
 
 namespace LIQServiceVec {
 using namespace AscendC;

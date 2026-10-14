@@ -278,7 +278,7 @@ log_selected_ops
 
   log "build command: bash build.sh --pkg --ops=\"${CUSTOM_OPS}\" --soc=\"${SOC_ARG}\""
   log "building custom ops ${CUSTOM_OPS} for ${SOC_VERSION}"
-  bash build.sh --pkg --ops="${CUSTOM_OPS}" --soc="${SOC_ARG}"
+  bash build.sh --pkg --ops="${CUSTOM_OPS}" --soc="${SOC_ARG}" -j1
   log "build.sh finished"
 
   custom_ops_install_dir="${ROOT_DIR}/vllm_ascend/_cann_ops_custom"

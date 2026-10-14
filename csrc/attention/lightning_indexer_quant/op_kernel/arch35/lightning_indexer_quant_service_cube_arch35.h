@@ -20,7 +20,7 @@
 #include "kernel_tiling/kernel_tiling.h"
 #include "lib/matmul_intf.h"
 #include "lib/matrix/matmul/tiling.h"
-#include "lightning_indexer_quant_common.h"
+#include "lightning_indexer_quant_common_arch35.h"
 
 namespace LIQKernel {
 using namespace LIQCommon;

@@ -125,6 +125,15 @@ void LIQInfoParser::GetOptionalInputParaInfo()
     opParamInfo_.actualSeqLengthsK.desc = context_->GetOptionalInputDesc(ACTUAL_SEQ_K_INDEX);
     opParamInfo_.blockTable.tensor = context_->GetOptionalInputTensor(BLOCK_TABLE_INDEX);
     opParamInfo_.blockTable.desc = context_->GetOptionalInputDesc(BLOCK_TABLE_INDEX);
+    // ---- ECHO-style prefetch optional inputs ----
+    opParamInfo_.tokenGvaTable.tensor = context_->GetOptionalInputTensor(TOKEN_GVA_TABLE_INDEX);
+    opParamInfo_.tokenGvaTable.desc = context_->GetOptionalInputDesc(TOKEN_GVA_TABLE_INDEX);
+    opParamInfo_.prefetchStagingBuf.tensor = context_->GetOptionalInputTensor(PREFETCH_STAGING_BUF_INDEX);
+    opParamInfo_.prefetchStagingBuf.desc = context_->GetOptionalInputDesc(PREFETCH_STAGING_BUF_INDEX);
+    opParamInfo_.prefetchSlotCounter.tensor = context_->GetOptionalInputTensor(PREFETCH_SLOT_COUNTER_INDEX);
+    opParamInfo_.prefetchSlotCounter.desc = context_->GetOptionalInputDesc(PREFETCH_SLOT_COUNTER_INDEX);
+    opParamInfo_.tokenToPrefetchSlot.tensor = context_->GetOptionalInputTensor(TOKEN_TO_PREFETCH_SLOT_INDEX);
+    opParamInfo_.tokenToPrefetchSlot.desc = context_->GetOptionalInputDesc(TOKEN_TO_PREFETCH_SLOT_INDEX);
 }
 
 void LIQInfoParser::GetInputParaInfo()
@@ -164,6 +173,9 @@ ge::graphStatus LIQInfoParser::GetAttrParaInfo()
     opParamInfo_.layOutKey = attrs->GetStr(ATTR_KEY_LAYOUT_INDEX);
     opParamInfo_.sparseCount = attrs->GetAttrPointer<int32_t>(ATTR_SPARSE_COUNT_INDEX);
     opParamInfo_.sparseMode = attrs->GetAttrPointer<int32_t>(ATTR_SPARSE_MODE_INDEX);
+    // ---- ECHO-style prefetch attr ----
+    opParamInfo_.emaThreshold = attrs->GetAttrPointer<float>(ATTR_EMA_THRESHOLD_INDEX);
+    opParamInfo_.tokenSizeBytesK = attrs->GetAttrPointer<uint32_t>(ATTR_TOKEN_SIZE_BYTES_K_INDEX);
 
     if (opParamInfo_.layOutQuery != nullptr) {
         OPS_LOG_I(context_->GetNodeName(), "layout_query is:%s", opParamInfo_.layOutQuery);
@@ -639,6 +651,17 @@ ge::graphStatus LIQInfoParser::ValidateInputShapesMatch()
     OPS_ERR_IF((opParamInfo_.attenOut.shape->GetStorageShape().GetDim(outN2Dim + 1) != *opParamInfo_.sparseCount),
                OPS_LOG_E(opName_, "output sparse_indices shape last dim must be same as attr sparse_count."),
                return ge::GRAPH_FAILED);
+    
+    //---- ECHO-style prefetch: 要么全传，要么全不传 ----
+    uint32_t prefetchInputCnt = 0;
+    if (opParamInfo_.tokenGvaTable.tensor != nullptr) prefetchInputCnt++;
+    if (opParamInfo_.prefetchStagingBuf.tensor != nullptr) prefetchInputCnt++;
+    if (opParamInfo_.prefetchSlotCounter.tensor != nullptr) prefetchInputCnt++;
+    if (opParamInfo_.tokenToPrefetchSlot.tensor != nullptr) prefetchInputCnt++;
+    OPS_ERR_IF(prefetchInputCnt != 0 && prefetchInputCnt != 4,
+               OPS_LOG_E(opName_, "prefetch inputs must be all present or all absent, but got %u of 4.",
+                         prefetchInputCnt),
+               return ge::GRAPH_FAILED);
 
     return ge::GRAPH_SUCCESS;
 }
@@ -706,6 +729,21 @@ void LIQInfoParser::GenerateInfo(LIQTilingInfo &liqInfo)
 
     liqInfo.inputQLayout = qLayout_;
     liqInfo.inputKLayout = kLayout_;
+
+    // ---- ECHO-style prefetch ----
+    liqInfo.emaThreshold = (opParamInfo_.emaThreshold != nullptr) ? *opParamInfo_.emaThreshold : 0.0f;
+    if (opParamInfo_.prefetchStagingBuf.tensor != nullptr && liqInfo.emaThreshold > 0.0f) {
+        auto &stagingShape = opParamInfo_.prefetchStagingBuf.tensor->GetStorageShape();
+        if (stagingShape.GetDimNum() >= 2) {
+            liqInfo.prefetchCandidateMax = static_cast<uint32_t>(stagingShape.GetDim(0));
+            liqInfo.kEntryBytes = static_cast<uint32_t>(stagingShape.GetDim(1));
+            //tokenSizeBytesK: K 部分字节数，用于查 token_gva_table K/V 分拆.
+            // 默认 K = 2 * head_dim, V = 1 * head_dim → K 占总 2/3.
+            liqInfo.tokenSizeBytesK = ((opParamInfo_.tokenSizeBytesK != nullptr)
+            ? *opParamInfo_.tokenSizeBytesK
+            : liqInfo.kEntryBytes * 2 / 3);
+        }
+    }
 }
 
 ge::graphStatus LIQInfoParser::ParseAndCheck(LIQTilingInfo &liqInfo)
@@ -787,6 +825,11 @@ ge::graphStatus LightningIndexerQuantTiling::DoTiling(LIQTilingInfo *tilingInfo)
     tilingData_.set_blockSize(tilingInfo->blockSize);
     tilingData_.set_maxBlockNumPerBatch(tilingInfo->maxBlockNumPerBatch);
     tilingData_.set_sparseMode(tilingInfo->sparseMode);
+    // ---- ECHO-style prefetch ----
+    tilingData_.set_emaThreshold(tilingInfo->emaThreshold);
+    tilingData_.set_prefetchCandidateMax(tilingInfo->prefetchCandidateMax);
+    tilingData_.set_kEntryBytes(tilingInfo->kEntryBytes);
+    tilingData_.set_tokenSizeBytesK(tilingInfo->tokenSizeBytesK);
     tilingData_.set_usedCoreNum(blockDim);
     tilingData_.SaveToBuffer(context_->GetRawTilingData()->GetData(), context_->GetRawTilingData()->GetCapacity());
     context_->GetRawTilingData()->SetDataSize(tilingData_.GetDataSize());

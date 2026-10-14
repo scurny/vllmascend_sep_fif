@@ -21,9 +21,9 @@
 #include "kernel_tiling/kernel_tiling.h"
 #include "lib/matmul_intf.h"
 #include "lib/matrix/matmul/tiling.h"
-#include "lightning_indexer_quant_common.h"
-#include "lightning_indexer_quant_service_vector.h"
-#include "lightning_indexer_quant_service_cube.h"
+#include "lightning_indexer_quant_common_arch35.h"
+#include "lightning_indexer_quant_service_vector_arch35.h"
+#include "lightning_indexer_quant_service_cube_arch35.h"
 
 namespace LIQKernel {
 using namespace LIQCommon;
@@ -58,7 +58,10 @@ public:
                                 __gm__ uint8_t *queryScale, __gm__ uint8_t *keyScale, __gm__ uint8_t *actualSeqLengthsQ,
                                 __gm__ uint8_t *actualSeqLengthsK, __gm__ uint8_t *blockTable,
                                 __gm__ uint8_t *sparseIndices, __gm__ uint8_t *workspace,
-                                const LIQTilingData *__restrict tiling, TPipe *tPipe);
+                                const LIQTilingData *__restrict tiling, TPipe *tPipe,
+                                // ---- ECHO-style prefetch ----
+                                __gm__ uint8_t *tokenGvaTable = nullptr, __gm__ uint8_t *prefetchStagingBuf = nullptr,
+                                __gm__ uint8_t *prefetchSlotCounter = nullptr, __gm__ uint8_t *tokenToPrefetchSlot = nullptr);
     __aicore__ inline void Process();
 
     // =================================类型定义区=================================
@@ -171,6 +174,11 @@ __aicore__ inline void LIQPreload<LIQT>::InitTilingData(const LIQTilingData *__r
     constInfo.mBaseSize = M_BASE_SIZE;
     constInfo.s2BaseSize = S2_BASE_SIZE;
     constInfo.s1BaseSize = (constInfo.mBaseSize + constInfo.gSize - 1) / constInfo.gSize;
+    // ---- ECHO-style prefetch ----
+    constInfo.emaThreshold = tilingData->emaThreshold;
+    constInfo.prefetchCandidateMax = tilingData->prefetchCandidateMax;
+    constInfo.kEntryBytes = tilingData->kEntryBytes;
+    constInfo.tokenSizeBytesK = tilingData->tokenSizeBytesK;
 }
 
 template <typename LIQT>
@@ -375,7 +383,10 @@ __aicore__ inline void LIQPreload<LIQT>::Init(__gm__ uint8_t *query, __gm__ uint
                                               __gm__ uint8_t *actualSeqLengthsQ, __gm__ uint8_t *actualSeqLengthsK,
                                               __gm__ uint8_t *blockTable, __gm__ uint8_t *sparseIndices,
                                               __gm__ uint8_t *workspace, const LIQTilingData *__restrict tiling,
-                                              TPipe *tPipe)
+                                              TPipe *tPipe,
+                                              // ---- ECHO-style prefetch ----
+                                              __gm__ uint8_t *tokenGvaTable, __gm__ uint8_t *prefetchStagingBuf,
+                                              __gm__ uint8_t *prefetchSlotCounter, __gm__ uint8_t *tokenToPrefetchSlot)
 {
     if ASCEND_IS_AIV {
         tmpBlockIdx = GetBlockIdx();  // vec:0-47
@@ -432,6 +443,20 @@ __aicore__ inline void LIQPreload<LIQT>::Init(__gm__ uint8_t *query, __gm__ uint
         blockTableGm.SetGlobalBuffer((__gm__ int32_t *)blockTable);
         vectorService.InitVecInputTensor(weightsGm, qScaleGm, kScaleGm, indiceOutGm, blockTableGm);
         vectorService.InitVecWorkspaceTensor(weightWorkspaceGm, mm1ResGm, vec1ResGm, vec1ParamGm);
+        //---- ECHO-style prefetch: 初始化 prefetch tensor ----
+        if (tokenGvaTable != nullptr && prefetchStagingBuf != nullptr &&
+            prefetchSlotCounter != nullptr && tokenToPrefetchSlot != nullptr) {
+            GlobalTensor<uint64_t> tokenGvaTableGmPrefetch;
+            GlobalTensor<uint8_t> prefetchStagingBufGmPrefetch;
+            GlobalTensor<int32_t> prefetchSlotCounterGmPrefetch;
+            GlobalTensor<int32_t> tokenToPrefetchSlotGmPrefetch;
+            tokenGvaTableGmPrefetch.SetGlobalBuffer((__gm__ uint64_t *)tokenGvaTable);
+            prefetchStagingBufGmPrefetch.SetGlobalBuffer((__gm__ uint8_t *)prefetchStagingBuf);
+            prefetchSlotCounterGmPrefetch.SetGlobalBuffer((__gm__ int32_t *)prefetchSlotCounter);
+            tokenToPrefetchSlotGmPrefetch.SetGlobalBuffer((__gm__ int32_t *)tokenToPrefetchSlot);
+            vectorService.InitPrefetchTensors(tokenGvaTableGmPrefetch, prefetchStagingBufGmPrefetch,
+            prefetchSlotCounterGmPrefetch, tokenToPrefetchSlotGmPrefetch);
+        }
     } else {
         matmulService.InitParams(constInfo);
         queryGm.SetGlobalBuffer((__gm__ Q_T *)query);

@@ -1209,14 +1209,21 @@ std::tuple<at::Tensor, at::Tensor> npu_quant_lightning_indexer_v2_compat_npu(
     const c10::optional<at::Tensor> &output_idx_offset,
     const c10::optional<at::Tensor> &metadata,
     int64_t max_seqlen_q, c10::string_view layout_q, c10::string_view layout_k,
-    int64_t mask_mode, int64_t cmp_ratio, int64_t return_value)
+    int64_t mask_mode, int64_t cmp_ratio, int64_t return_value,
+    const c10::optionalat::Tensor &token_gva_table,
+    const c10::optionalat::Tensor &prefetch_staging_buf,
+    const c10::optionalat::Tensor &prefetch_slot_counter,
+    const c10::optionalat::Tensor &token_to_prefetch_slot,
+    double ema_threshold, int64_t token_size_bytes_k)
 {
     TORCH_CHECK(return_value == 0, "npu_quant_lightning_indexer_v2 only supports return_value=0");
     auto outputs = qli_v2::QuantLightningIndexerCandidate(
         query, key, weights, query_dequant_scale, key_dequant_scale, topk, quant_mode,
         c10::nullopt, cu_seqlens_q, cu_seqlens_k, seqused_q, seqused_k, cmp_residual_k,
         block_table, output_idx_offset, metadata, max_seqlen_q, layout_q, layout_k,
-        mask_mode, cmp_ratio, 3, 2048, 8);
+        mask_mode, cmp_ratio, 3, 2048, 8,
+        token_gva_table, prefetch_staging_buf, prefetch_slot_counter, token_to_prefetch_slot,
+        ema_threshold, token_size_bytes_k);
     return {std::get<0>(outputs), std::get<1>(outputs)};
 }
 
@@ -3187,7 +3194,13 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
         "Tensor? block_table=None, Tensor? output_idx_offset=None, Tensor? metadata=None, "
         "int max_seqlen_q=-1, str layout_q='TND', str layout_k='PA_BBND', int mask_mode=3, "
         "int cmp_ratio=1, int candidate_mode=3, int candidate_topk_blocks=2048, "
-        "int candidate_block_size=8) -> (Tensor, Tensor, Tensor)"
+        "int candidate_block_size=8, "
+        "Tensor? token_gva_table=None, "
+        "Tensor? prefetch_staging_buf=None, "
+        "Tensor? prefetch_slot_counter=None, "
+        "Tensor? token_to_prefetch_slot=None, "
+        "float ema_threshold=0.0, "
+        "int token_size_bytes_k=0) -> (Tensor, Tensor, Tensor)"
     );
     ops.impl("npu_quant_lightning_indexer_v3", torch::kPrivateUse1,
              &vllm_ascend::qli_v2::QuantLightningIndexerCandidate);
@@ -3415,8 +3428,15 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
             "Tensor? metadata=None, "
             "int max_seqlen_q=-1, "
             "str layout_q=\"TND\", str layout_k=\"PA_BBND\", "
-            "int mask_mode=3, int cmp_ratio=4, int return_value=0"
-        ") -> (Tensor sparse_indices, Tensor sparse_values)"
+            "int mask_mode=3, int cmp_ratio=4, int return_value=0, "
+            //---- 新增 6 个 ----
+            "Tensor? token_gva_table=None, "
+            "Tensor? prefetch_staging_buf=None, "
+            "Tensor? prefetch_slot_counter=None, "
+            "Tensor? token_to_prefetch_slot=None, "
+            "float ema_threshold=0.0, "
+            "int token_size_bytes_k=0"
+            ") -> (Tensor sparse_indices, Tensor sparse_values)"
         );
     ops.impl("npu_quant_lightning_indexer_v2", torch::kPrivateUse1,
              &vllm_ascend::npu_quant_lightning_indexer_v2_compat_npu);
@@ -3683,7 +3703,13 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
         "                            Tensor? actual_seq_lengths_key=None, Tensor? block_table=None, "
         "                            int query_quant_mode=0, int key_quant_mode=0, "
         "                            str layout_query='BSND', str layout_key='BSND',"
-        "                            int sparse_count=2048, int sparse_mode=3) -> Tensor"
+        "                            int sparse_count=2048, int sparse_mode=3, "
+        "                            Tensor? token_gva_table=None, "
+        "                            Tensor? prefetch_staging_buf=None, "
+        "                            Tensor? prefetch_slot_counter=None, "
+        "                            Tensor? token_to_prefetch_slot=None, "
+        "                            float ema_threshold=0.0, "
+        "                            int token_size_bytes_k=0) -> Tensor"
     );
     ops.impl("npu_lightning_indexer_quant", torch::kPrivateUse1, &vllm_ascend::npu_lightning_indexer_quant);
 
