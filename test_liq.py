@@ -193,3 +193,46 @@ for iteration in range(8):
     assert torch.equal(staging.cpu()[hit_slots, :token_size_bytes_k], k_pool.cpu()[hit_tokens])
     assert torch.equal(staging.cpu()[hit_slots, token_size_bytes_k:], v_pool.cpu()[hit_tokens])
 print("=== Test 5 PASS ===")
+
+print("=== Test 6: 拒绝错误的预取表形状 ===")
+invalid_tables = [
+    ("GVA rank", "token_gva_table", token_gva_table.reshape(-1, 2)),
+    ("GVA rows", "token_gva_table", token_gva_table[:0]),
+    ("GVA short width", "token_gva_table", token_gva_table[:, :-1].contiguous()),
+    ("GVA long width", "token_gva_table",
+     torch.zeros((B, kSeqSize + 1, 2), dtype=torch.int64, device='npu')),
+    ("GVA address pair", "token_gva_table", token_gva_table[:, :, :1].contiguous()),
+    ("map rank", "token_to_prefetch_slot", slot_map.reshape(-1)),
+    ("map rows", "token_to_prefetch_slot", slot_map[:0]),
+    ("map short width", "token_to_prefetch_slot", slot_map[:, :-1].contiguous()),
+    ("map long width", "token_to_prefetch_slot",
+     torch.full((B, kSeqSize + 1), -1, dtype=torch.int32, device='npu')),
+    ("counter rank", "prefetch_slot_counter", counter.reshape(1, 1)),
+    ("counter empty", "prefetch_slot_counter", counter[:0]),
+]
+for case_name, argument, invalid_tensor in invalid_tables:
+    inputs = dict(token_gva_table=token_gva_table, prefetch_staging_buf=staging,
+                  prefetch_slot_counter=counter, token_to_prefetch_slot=slot_map,
+                  ema_threshold=1.0, token_size_bytes_k=token_size_bytes_k)
+    inputs[argument] = invalid_tensor
+    rejected = False
+    try:
+        run_op(**inputs)
+    except RuntimeError:
+        rejected = True
+    assert rejected, f"invalid prefetch shape accepted: {case_name}"
+torch.npu.synchronize()
+
+extra_rows_gva = token_gva_table.repeat(2, 1, 1)
+extra_rows_map = torch.full((2 * B, kSeqSize), -1, dtype=torch.int32, device='npu')
+out6 = run_op(token_gva_table=extra_rows_gva, prefetch_staging_buf=staging,
+              prefetch_slot_counter=counter, token_to_prefetch_slot=extra_rows_map,
+              ema_threshold=1.0, token_size_bytes_k=token_size_bytes_k)
+check_out("[T6 extra rows]", out6)
+hit_tokens = (extra_rows_map[0].cpu() >= 0).nonzero().flatten()
+assert torch.equal(hit_tokens, expected_tokens)
+assert torch.all(extra_rows_map[B:] == -1).item()
+hit_slots = extra_rows_map[0].cpu()[hit_tokens].long()
+assert torch.equal(staging.cpu()[hit_slots, :token_size_bytes_k], k_pool.cpu()[hit_tokens])
+assert torch.equal(staging.cpu()[hit_slots, token_size_bytes_k:], v_pool.cpu()[hit_tokens])
+print("=== Test 6 PASS ===")

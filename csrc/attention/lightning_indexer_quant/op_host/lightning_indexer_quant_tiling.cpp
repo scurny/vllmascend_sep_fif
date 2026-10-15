@@ -679,6 +679,24 @@ ge::graphStatus LIQInfoParser::CheckPrefetchParams()
         *opParamInfo_.emaThreshold <= 0.0f) {
         return ge::GRAPH_SUCCESS;
     }
+    const auto &gvaShape = opParamInfo_.tokenGvaTable.tensor->GetStorageShape();
+    const auto &slotMapShape = opParamInfo_.tokenToPrefetchSlot.tensor->GetStorageShape();
+    const auto &counterShape = opParamInfo_.prefetchSlotCounter.tensor->GetStorageShape();
+    OPS_ERR_IF(gvaShape.GetDimNum() != DIM_NUM_THREE || slotMapShape.GetDimNum() != DIM_NUM_TWO ||
+                   counterShape.GetDimNum() != 1,
+               OPS_LOG_E(opName_, "prefetch requires rank-3 GVA, rank-2 slot map and rank-1 counter tensors"),
+               return ge::GRAPH_FAILED);
+    OPS_ERR_IF(gvaShape.GetDim(0) < bSize_ || slotMapShape.GetDim(0) < bSize_,
+               OPS_LOG_E(opName_, "prefetch GVA and slot map must have at least batch_size rows"),
+               return ge::GRAPH_FAILED);
+    OPS_ERR_IF(gvaShape.GetDim(1) != s2Size_ || slotMapShape.GetDim(1) != s2Size_ ||
+                   gvaShape.GetDim(2) != DIM_NUM_TWO,
+               OPS_LOG_E(opName_, "prefetch GVA and slot map row widths must equal key sequence capacity, "
+                                  "with two addresses per GVA entry"),
+               return ge::GRAPH_FAILED);
+    OPS_ERR_IF(counterShape.GetDim(0) < 1,
+               OPS_LOG_E(opName_, "prefetch_slot_counter must contain at least one element"),
+               return ge::GRAPH_FAILED);
     const auto &stagingShape = opParamInfo_.prefetchStagingBuf.tensor->GetStorageShape();
     OPS_ERR_IF(stagingShape.GetDimNum() != DIM_NUM_TWO,
                OPS_LOG_E(opName_, "prefetch_staging_buf must have shape [slots, entry_bytes]"),
