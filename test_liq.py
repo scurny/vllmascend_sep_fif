@@ -35,6 +35,9 @@ def run_op(**kw):
 
 def check_out(tag, out):
     torch.npu.synchronize()  # aicore 异步错误在此暴露, 而不是退出时
+    assert out.shape == (B * S1, 1, topk), (tag, out.shape)
+    assert out.dtype == torch.int32, (tag, out.dtype)
+    assert torch.all((out >= -1) & (out < asl_k)).item(), tag
     print(tag, "shape:", tuple(out.shape), "dtype:", out.dtype)
     print(tag, "sample:", out.flatten()[:16].cpu().tolist())
     print(tag, "min/max:", out.min().item(), out.max().item())  # 索引应在 [-1, asl_k) 内

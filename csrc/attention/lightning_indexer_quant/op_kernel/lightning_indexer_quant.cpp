@@ -38,12 +38,12 @@ template <int DT_Q, int DT_K, int DT_OUT, int PAGE_ATTENTION, int Q_LAYOUT_T, in
 __global__ __aicore__ void lightning_indexer_quant(__gm__ uint8_t *query, __gm__ uint8_t *key, __gm__ uint8_t *weights,
                                                    __gm__ uint8_t *queryScale, __gm__ uint8_t *keyScale,
                                                    __gm__ uint8_t *actualSeqLengthsQ, __gm__ uint8_t *actualSeqLengthsK,
-                                                   __gm__ uint8_t *blocktable, __gm__ uint8_t *sparseIndices,
-                                                   __gm__ uint8_t *workspace, __gm__ uint8_t *tiling,
-                                                   __gm__ uint8_t *tokenGvaTable = nullptr,
-                                                   __gm__ uint8_t *prefetchStagingBuf = nullptr,
-                                                   __gm__ uint8_t *prefetchSlotCounter = nullptr,
-                                                   __gm__ uint8_t *tokenToPrefetchSlot = nullptr)
+                                                   __gm__ uint8_t *blocktable, __gm__ uint8_t *tokenGvaTable,
+                                                   __gm__ uint8_t *prefetchStagingBuf,
+                                                   __gm__ uint8_t *prefetchSlotCounter,
+                                                   __gm__ uint8_t *tokenToPrefetchSlot,
+                                                   __gm__ uint8_t *sparseIndices, __gm__ uint8_t *workspace,
+                                                   __gm__ uint8_t *tiling)
 {
 #if (__CCE_AICORE__ == 200)
     // A2 不编
