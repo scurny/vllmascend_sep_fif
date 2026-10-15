@@ -219,7 +219,7 @@ __aicore__ inline void LIQVector<LIQT>::InitBuffers(TPipe *pipe)
     if (prefetchCandidateMax_ > 0 && kEntryBytes_ > 0) {
         pipe->InitBuffer(prefetchUbBuf_, kEntryBytes_);
         prefetchUbLocal_ = prefetchUbBuf_.Get<uint8_t>();
-        pipe->InitBuffer(cmpMaskBuf_, 32);
+        pipe->InitBuffer(cmpMaskBuf_, LIQCommon::Align(LIQCommon::CeilDiv(s2BaseSize_, 8), 32));
         cmpMaskUb_ = cmpMaskBuf_.Get<uint8_t>();
     }
 }
