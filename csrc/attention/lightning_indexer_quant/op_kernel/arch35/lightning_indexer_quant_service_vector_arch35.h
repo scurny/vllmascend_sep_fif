@@ -122,6 +122,7 @@ private:
     uint32_t prefetchCandidateMax_ = 0;
     uint32_t kEntryBytes_ = 0;
     uint32_t tokenSizeBytesK_ = 0;
+    int32_t prefetchNextSlot_ = -1;  // P2-6: 核内持久 slot 游标，避免每行重置导致 staging 覆盖
     TBuf<TPosition::VECCALC> prefetchUbBuf_;
     LocalTensor<uint8_t> prefetchUbLocal_;
     TBuf<TPosition::VECCALC> cmpMaskBuf_;
@@ -219,7 +220,8 @@ __aicore__ inline void LIQVector<LIQT>::InitBuffers(TPipe *pipe)
     if (prefetchCandidateMax_ > 0 && kEntryBytes_ > 0) {
         pipe->InitBuffer(prefetchUbBuf_, kEntryBytes_);
         prefetchUbLocal_ = prefetchUbBuf_.Get<uint8_t>();
-        pipe->InitBuffer(cmpMaskBuf_, 32);
+        // P0-2: CompareScalar 位压缩掩码需 ceil(cuS2Len/8) 字节（cuS2Len 上限 s2BaseSize_=2048 → 256B），原 32B 会 UB 越界写
+        pipe->InitBuffer(cmpMaskBuf_, s2BaseSize_ / 8);
         cmpMaskUb_ = cmpMaskBuf_.Get<uint8_t>();
     }
 }
@@ -299,7 +301,9 @@ __aicore__ inline void LIQVector<LIQT>::PrefetchScoresInVec1(
     uint32_t cuS2Len, uint32_t cuBaseS2Idx)
 {
     // 仅 emaThreshold > 0 且 prefetch 输入已提供时触发 prefetch
-    if (constInfo_.emaThreshold <= 0.0f || prefetchCandidateMax_ == 0 || kEntryBytes_ == 0) {
+    // P1-5: 防无符号回绕：tokenSizeBytesV = kEntryBytes_ - tokenSizeBytesK_ 需保证 0 < tokenSizeBytesK_ < kEntryBytes_
+    if (constInfo_.emaThreshold <= 0.0f || prefetchCandidateMax_ == 0 || kEntryBytes_ == 0 ||
+        tokenSizeBytesK_ == 0 || tokenSizeBytesK_ >= kEntryBytes_) {
         return;
     }
 
@@ -317,17 +321,20 @@ __aicore__ inline void LIQVector<LIQT>::PrefetchScoresInVec1(
 
     int32_t coreSlotBase = blockId_ * slotsPerCore;
     int32_t coreSlotEnd = coreSlotBase + slotsPerCore;
-    int32_t localSlot = coreSlotBase;
 
     // CompareScalar: scoresUb > emaThreshold → bitmask
     uint32_t cmpLenAlign = LIQCommon::Align(cuS2Len, (uint32_t)32);
     AscendC::CompareScalar(cmpMaskUb_, scoresUb, static_cast<float>(constInfo_.emaThreshold),
     AscendC::CMPMODE::GT, cmpLenAlign);
 
+    // 掩码由 V 管道写入、标量读取，需同步防陈旧读
+    SetWaitFlag<HardEvent::V_S>(HardEvent::V_S);
     // 收集超过阈值的 position
     uint32_t validInRow = 0;
+    // P1-3: 限制单行预取数，防止 bitPositions[256] 栈溢出（超出部分放弃，与"slot 满即放弃"语义一致）
+    constexpr uint32_t MAX_PREFETCH_PER_ROW = 256;
     uint32_t bitPositions [256];  //s2BaseSize 上限 2048, 但单次 cuS2Len <= 2048
-    for (uint32_t j = 0; j < cuS2Len; j++) {
+    for (uint32_t j = 0; j < cuS2Len && validInRow < MAX_PREFETCH_PER_ROW; j++) {
         if ((cmpMaskUb_.GetValue(j / 8) >> (j % 8)) & 1) {
             bitPositions[validInRow++] = j;
         }
@@ -337,12 +344,15 @@ __aicore__ inline void LIQVector<LIQT>::PrefetchScoresInVec1(
         return;
     }
 
-    // 检查核内 slot capacity
-    int32_t slotStart = localSlot;
-    localSlot += static_cast<int32_t>(validInRow);
-
+    // P2-6: 游标跨 S1 行持久化（kernel 对象每次 launch 重建，等效按 launch 重置）
+    if (prefetchNextSlot_ < coreSlotBase) {
+        prefetchNextSlot_ = coreSlotBase;
+    }
+    int32_t slotStart = prefetchNextSlot_;
+    prefetchNextSlot_ += static_cast<int32_t>(validInRow);
     if (slotStart + static_cast<int32_t>(validInRow) > coreSlotEnd) {
-        return;  // 放弃这行
+        prefetchNextSlot_ = coreSlotEnd;  // 本核 slot 用尽，后续行不再预取
+        return;
     }
 
     //---- 跨 request 偏移: tokenGvaTable/tokenToPrefetchSlot layout 为 [num_reqs, max_tokens, *] ----
@@ -362,10 +372,16 @@ __aicore__ inline void LIQVector<LIQT>::PrefetchScoresInVec1(
         // 1. 从 tokenGvaTable 读取 K/V 两个 GVA 地址 (layout: [num_reqs, max_tokens, 2])
         uint64_t gvaK = tokenGvaTableGm_.GetValue(static_cast<uint64_t>(globalPos) * 2);
         uint64_t gvaV = tokenGvaTableGm_.GetValue(static_cast<uint64_t>(globalPos) * 2 + 1);
+        // P0-1: GVA 为 0 视为无效条目，跳过该 token，避免对非法地址发起 MTE 搬运导致 device fault
+        if (gvaK == 0 || gvaV == 0) {
+            continue;
+        }
         
         // 2. 写 token→slot 映射
         tokenToPrefetchSlotGm_.SetValue(static_cast<uint64_t>(globalPos), slot);
         
+        // P1-4: 标量单元读出的地址需对 MTE2 可见后再发起搬运 (对照 GetKeyScale 的 S_MTE2 同步)
+        SetWaitFlag<HardEvent::S_MTE2>(HardEvent::S_MTE2);
         // 3. GVA→UB: 先 K 再 V
         GlobalTensor<uint8_t> srcGmK;
         srcGmK.SetGlobalBuffer(reinterpret_cast<__gm__ uint8_t *>(gvaK));
@@ -374,10 +390,14 @@ __aicore__ inline void LIQVector<LIQT>::PrefetchScoresInVec1(
         srcGmV.SetGlobalBuffer(reinterpret_cast<__gm__ uint8_t *>(gvaV));
         AscendC::DataCopyPad(prefetchUbLocal_[tokenSizeBytesK_], srcGmV, copyParamsV, padParams);
         
+        // P2-6: MTE2 写 UB 完成后再由 MTE3 读同一 UB，防止 staging 拿到半成品数据
+        SetWaitFlag<HardEvent::MTE2_MTE3>(HardEvent::MTE2_MTE3);
         // 4. UB→Staging Buffer
         AscendC::DataCopyPad(
         prefetchStagingBufGm_[static_cast<uint64_t>(slot) * static_cast<uint64_t>(kEntryBytes_)],
         prefetchUbLocal_, copyParamsFull);
+        // P2-6: 保护下一轮迭代对 prefetchUbLocal_ 的 MTE2 复写不与本次 MTE3 读冲突
+        SetWaitFlag<HardEvent::MTE3_MTE2>(HardEvent::MTE3_MTE2);
     }
 }
 

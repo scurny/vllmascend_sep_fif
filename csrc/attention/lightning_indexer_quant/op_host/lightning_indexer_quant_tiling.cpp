@@ -669,6 +669,27 @@ ge::graphStatus LIQInfoParser::ValidateInputShapesMatch()
                          prefetchInputCnt),
                return ge::GRAPH_FAILED);
 
+    // P0-1: token_gva_table 形状/dtype 校验，防止 kernel 扁平索引越界读出垃圾 GVA 地址
+    if (opParamInfo_.tokenGvaTable.tensor != nullptr) {
+        auto &gvaShape = opParamInfo_.tokenGvaTable.tensor->GetStorageShape();
+        OPS_ERR_IF(gvaShape.GetDimNum() != 3 || static_cast<uint32_t>(gvaShape.GetDim(2)) != 2,
+                   OPS_LOG_E(opName_, "token_gva_table shape must be [num_reqs, max_tokens, 2], but dim num is %u.",
+                             gvaShape.GetDimNum()),
+                   return ge::GRAPH_FAILED);
+        OPS_ERR_IF(static_cast<uint32_t>(gvaShape.GetDim(0)) < bSize_,
+                   OPS_LOG_E(opName_, "token_gva_table dim0(%u) must be >= batch size(%u).",
+                             static_cast<uint32_t>(gvaShape.GetDim(0)), bSize_),
+                   return ge::GRAPH_FAILED);
+        OPS_ERR_IF(static_cast<uint32_t>(gvaShape.GetDim(1)) < s2Size_,
+                   OPS_LOG_E(opName_, "token_gva_table dim1(%u) must be >= key seq capacity s2(%u).",
+                             static_cast<uint32_t>(gvaShape.GetDim(1)), s2Size_),
+                   return ge::GRAPH_FAILED);
+        auto gvaDtype = opParamInfo_.tokenGvaTable.desc->GetDataType();
+        OPS_ERR_IF(gvaDtype != ge::DT_UINT64 && gvaDtype != ge::DT_INT64,
+                   OPS_LOG_E(opName_, "token_gva_table dtype must be uint64 or int64."),
+                   return ge::GRAPH_FAILED);
+    }
+
     return ge::GRAPH_SUCCESS;
 }
 
@@ -708,7 +729,7 @@ ge::graphStatus LIQInfoParser::CheckScaleShape()
     return ge::GRAPH_SUCCESS;
 }
 
-void LIQInfoParser::GenerateInfo(LIQTilingInfo &liqInfo)
+ge::graphStatus LIQInfoParser::GenerateInfo(LIQTilingInfo &liqInfo)
 {
     liqInfo.opName = opName_;
     liqInfo.platformInfo = platformInfo_;
@@ -757,11 +778,23 @@ void LIQInfoParser::GenerateInfo(LIQTilingInfo &liqInfo)
             liqInfo.tokenSizeBytesK = ((opParamInfo_.tokenSizeBytesK != nullptr)
             ? *opParamInfo_.tokenSizeBytesK
             : liqInfo.kEntryBytes * 2 / 3);
+            // P1-5/P2-7: 尺寸与对齐校验，防止 kernel 侧无符号回绕与非对齐搬运 (fail-fast 优于段错误)
+            OPS_ERR_IF(liqInfo.kEntryBytes == 0 || (liqInfo.kEntryBytes % 32) != 0,
+                       OPS_LOG_E(opName_, "prefetch_staging_buf dim1 (kEntryBytes=%u) must be a non-zero multiple of 32.",
+                                 liqInfo.kEntryBytes),
+                       return ge::GRAPH_FAILED);
+            OPS_ERR_IF(liqInfo.tokenSizeBytesK == 0 || liqInfo.tokenSizeBytesK >= liqInfo.kEntryBytes ||
+                       (liqInfo.tokenSizeBytesK % 32) != 0,
+                       OPS_LOG_E(opName_,
+                                 "token_size_bytes_k=%u must satisfy 0 < v < kEntryBytes(%u) and be a multiple of 32.",
+                                 liqInfo.tokenSizeBytesK, liqInfo.kEntryBytes),
+                       return ge::GRAPH_FAILED);
             printf("[LIQ_TILING] prefetch enabled: prefetchCandidateMax=%u kEntryBytes=%u tokenSizeBytesK=%u\n",
                    liqInfo.prefetchCandidateMax, liqInfo.kEntryBytes, liqInfo.tokenSizeBytesK);
             fflush(stdout);
         }
     }
+    return ge::GRAPH_SUCCESS;
 }
 
 ge::graphStatus LIQInfoParser::ParseAndCheck(LIQTilingInfo &liqInfo)
@@ -789,7 +822,9 @@ ge::graphStatus LIQInfoParser::ParseAndCheck(LIQTilingInfo &liqInfo)
         return ge::GRAPH_FAILED;
     }
 
-    GenerateInfo(liqInfo);
+    if (GenerateInfo(liqInfo) != ge::GRAPH_SUCCESS) {
+        return ge::GRAPH_FAILED;
+    }
 
     return ge::GRAPH_SUCCESS;
 }

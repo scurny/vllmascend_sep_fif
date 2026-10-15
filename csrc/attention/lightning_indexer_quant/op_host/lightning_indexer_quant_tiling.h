@@ -211,7 +211,7 @@ public:
     ge::graphStatus GetGSize();
     ge::graphStatus GetAttenMaskInfo();
     ge::graphStatus GetActualSeqInfo();
-    void GenerateInfo(LIQTilingInfo &liqInfo);
+    ge::graphStatus GenerateInfo(LIQTilingInfo &liqInfo);
     ge::graphStatus ParseAndCheck(LIQTilingInfo &liqInfo);
 
 public:
