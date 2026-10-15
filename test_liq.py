@@ -155,8 +155,11 @@ for row in range(S1):
     start = 256 + row * prefetch_hits_per_row
     key.view(-1, D)[start:start + prefetch_hits_per_row, row] = 1
 expected_tokens = torch.arange(256, 256 + S1 * prefetch_hits_per_row)
-for iteration in range(2):
-    staging, counter, slot_map = make_prefetch_tensors()
+staging, counter, slot_map = make_prefetch_tensors()
+for iteration in range(8):
+    staging.fill_(0xA5)
+    counter.zero_()
+    slot_map.fill_(-1)
     out4 = run_op(token_gva_table=token_gva_table, prefetch_staging_buf=staging,
                   prefetch_slot_counter=counter, token_to_prefetch_slot=slot_map,
                   ema_threshold=1.0, token_size_bytes_k=token_size_bytes_k)
@@ -168,3 +171,25 @@ for iteration in range(2):
     assert torch.equal(staging.cpu()[hit_slots, :token_size_bytes_k], k_pool.cpu()[hit_tokens])
     assert torch.equal(staging.cpu()[hit_slots, token_size_bytes_k:], v_pool.cpu()[hit_tokens])
 print("=== Test 4 PASS ===")
+
+print("=== Test 5: 多核重复 token 与缓存行边界 ===")
+query.zero_()
+query[:, :, 0] = 1
+key.zero_()
+expected_tokens = torch.tensor([255, 256, 271, 272], dtype=torch.int64)
+key.view(-1, D)[expected_tokens.to('npu'), 0] = 1
+for iteration in range(8):
+    staging.fill_(0xA5)
+    counter.zero_()
+    slot_map.fill_(-1)
+    out5 = run_op(token_gva_table=token_gva_table, prefetch_staging_buf=staging,
+                  prefetch_slot_counter=counter, token_to_prefetch_slot=slot_map,
+                  ema_threshold=1.0, token_size_bytes_k=token_size_bytes_k)
+    check_out(f"[T5 iteration {iteration}]", out5)
+    hit_tokens = (slot_map[0].cpu() >= 0).nonzero().flatten()
+    assert torch.equal(hit_tokens, expected_tokens)
+    hit_slots = slot_map[0].cpu()[hit_tokens].long()
+    assert torch.unique(hit_slots).numel() == expected_tokens.numel()
+    assert torch.equal(staging.cpu()[hit_slots, :token_size_bytes_k], k_pool.cpu()[hit_tokens])
+    assert torch.equal(staging.cpu()[hit_slots, token_size_bytes_k:], v_pool.cpu()[hit_tokens])
+print("=== Test 5 PASS ===")

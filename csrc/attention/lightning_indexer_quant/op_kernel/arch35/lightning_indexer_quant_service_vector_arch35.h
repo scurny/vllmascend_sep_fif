@@ -16,6 +16,9 @@
 #define LIGHTNING_INDEXER_QUANT_SERVICE_VECTOR_H
 
 #include "kernel_operator.h"
+#if (__CCE_AICORE__ == 310)
+#include "basic_api/kernel_operator_atomic_intf.h"
+#endif
 #include "kernel_operator_list_tensor_intf.h"
 #include "kernel_tiling/kernel_tiling.h"
 #include "lib/matmul_intf.h"
@@ -368,9 +371,6 @@ __aicore__ inline void LIQVector<LIQT>::PrefetchScoresInVec1(
         uint64_t gvaK = tokenGvaTableGm_.GetValue(static_cast<uint64_t>(globalPos) * 2);
         uint64_t gvaV = tokenGvaTableGm_.GetValue(static_cast<uint64_t>(globalPos) * 2 + 1);
         
-        // 2. 写 token→slot 映射
-        tokenToPrefetchSlotGm_.SetValue(static_cast<uint64_t>(globalPos), slot);
-        
         // 3. GVA→UB: 先 K 再 V
         GlobalTensor<uint8_t> srcGmK;
         srcGmK.SetGlobalBuffer(reinterpret_cast<__gm__ uint8_t *>(gvaK));
@@ -386,6 +386,19 @@ __aicore__ inline void LIQVector<LIQT>::PrefetchScoresInVec1(
         prefetchStagingBufGm_[static_cast<uint64_t>(slot) * static_cast<uint64_t>(kEntryBytes_)],
         prefetchUbLocal_, copyParamsFull);
         SetWaitFlag<HardEvent::MTE3_MTE2>(HardEvent::MTE3_MTE2);
+    }
+
+    // Publish only completed payloads. Atomic writes avoid shared DCache-line writeback on 950.
+    SetWaitFlag<HardEvent::MTE3_S>(HardEvent::MTE3_S);
+    for (uint32_t k = 0; k < validInRow; k++) {
+        int64_t globalPos = reqTokenBase + cuBaseS2Idx + static_cast<int64_t>(bitPositions[k]);
+        int32_t slot = slotStart + static_cast<int32_t>(k);
+#if (__CCE_AICORE__ == 310)
+        auto *slotMap = reinterpret_cast<__gm__ uint32_t *>(tokenToPrefetchSlotGm_.GetPhyAddr());
+        (void)AscendC::AtomicExch(slotMap + globalPos, static_cast<uint32_t>(slot));
+#else
+        tokenToPrefetchSlotGm_.SetValue(static_cast<uint64_t>(globalPos), slot);
+#endif
     }
 }
 
