@@ -134,7 +134,7 @@ struct LIQParaInfo {
     const int32_t *sparseCount = nullptr;
     // ---- ECHO-style prefetch attr ----
     const float *emaThreshold = nullptr;
-    const uint32_t *tokenSizeBytesK = nullptr;
+    const int64_t *tokenSizeBytesK = nullptr;
 };
 
 // -----------算子Tiling入参信息类---------------
@@ -194,6 +194,7 @@ public:
     ge::graphStatus CheckAttrParaInfo();
     ge::graphStatus GetOpParaInfo();
     ge::graphStatus ValidateInputShapesMatch();
+    ge::graphStatus CheckPrefetchParams();
     ge::graphStatus CheckScaleShape();
     ge::graphStatus GetAndCheckInOutDataType();
     ge::graphStatus GetBatchSize();
@@ -228,6 +229,7 @@ public:
     uint32_t s1Size_ = 0;
     int64_t s2Size_ = 0;
     uint32_t headDim_ = 0;
+    uint32_t tokenSizeBytesK_ = 0;
     // Layout
     DataLayout qLayout_ = DataLayout::BSND;
     DataLayout kLayout_ = DataLayout::PA_BSND;

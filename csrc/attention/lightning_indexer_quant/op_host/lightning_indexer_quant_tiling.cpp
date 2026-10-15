@@ -16,6 +16,7 @@
 #include "lightning_indexer_quant_tiling.h"
 
 #include <cstdio>
+#include <limits>
 
 #include "../op_kernel/lightning_indexer_quant_template_tiling_key.h"
 
@@ -181,7 +182,7 @@ ge::graphStatus LIQInfoParser::GetAttrParaInfo()
     opParamInfo_.sparseMode = attrs->GetAttrPointer<int32_t>(ATTR_SPARSE_MODE_INDEX);
     // ---- ECHO-style prefetch attr ----
     opParamInfo_.emaThreshold = attrs->GetAttrPointer<float>(ATTR_EMA_THRESHOLD_INDEX);
-    opParamInfo_.tokenSizeBytesK = attrs->GetAttrPointer<uint32_t>(ATTR_TOKEN_SIZE_BYTES_K_INDEX);
+    opParamInfo_.tokenSizeBytesK = attrs->GetAttrPointer<int64_t>(ATTR_TOKEN_SIZE_BYTES_K_INDEX);
 
     if (opParamInfo_.layOutQuery != nullptr) {
         OPS_LOG_I(context_->GetNodeName(), "layout_query is:%s", opParamInfo_.layOutQuery);
@@ -669,6 +670,37 @@ ge::graphStatus LIQInfoParser::ValidateInputShapesMatch()
                          prefetchInputCnt),
                return ge::GRAPH_FAILED);
 
+    return CheckPrefetchParams();
+}
+
+ge::graphStatus LIQInfoParser::CheckPrefetchParams()
+{
+    if (opParamInfo_.prefetchStagingBuf.tensor == nullptr || opParamInfo_.emaThreshold == nullptr ||
+        *opParamInfo_.emaThreshold <= 0.0f) {
+        return ge::GRAPH_SUCCESS;
+    }
+    const auto &stagingShape = opParamInfo_.prefetchStagingBuf.tensor->GetStorageShape();
+    OPS_ERR_IF(stagingShape.GetDimNum() != DIM_NUM_TWO,
+               OPS_LOG_E(opName_, "prefetch_staging_buf must have shape [slots, entry_bytes]"),
+               return ge::GRAPH_FAILED);
+    int64_t slots = stagingShape.GetDim(0);
+    int64_t entryBytes = stagingShape.GetDim(1);
+    OPS_ERR_IF(slots <= 0 || slots > std::numeric_limits<int32_t>::max() || entryBytes <= 0 ||
+                   entryBytes > std::numeric_limits<uint32_t>::max(),
+               OPS_LOG_E(opName_, "prefetch staging dimensions exceed slot or byte-count limits"),
+               return ge::GRAPH_FAILED);
+    int64_t kBytes = opParamInfo_.tokenSizeBytesK == nullptr ? 0 : *opParamInfo_.tokenSizeBytesK;
+    if (kBytes == 0) {
+        kBytes = entryBytes * 2 / 3;
+    }
+    OPS_ERR_IF(kBytes <= 0 || kBytes >= entryBytes,
+               OPS_LOG_E(opName_, "prefetch requires 0 < token_size_bytes_k < staging entry_bytes"),
+               return ge::GRAPH_FAILED);
+    constexpr int64_t PREFETCH_DMA_ALIGNMENT = 32;
+    OPS_ERR_IF(kBytes % PREFETCH_DMA_ALIGNMENT != 0 || entryBytes % PREFETCH_DMA_ALIGNMENT != 0,
+               OPS_LOG_E(opName_, "prefetch K and V byte lengths must be 32-byte aligned"),
+               return ge::GRAPH_FAILED);
+    tokenSizeBytesK_ = static_cast<uint32_t>(kBytes);
     return ge::GRAPH_SUCCESS;
 }
 
@@ -752,11 +784,7 @@ void LIQInfoParser::GenerateInfo(LIQTilingInfo &liqInfo)
         if (stagingShape.GetDimNum() >= 2) {
             liqInfo.prefetchCandidateMax = static_cast<uint32_t>(stagingShape.GetDim(0));
             liqInfo.kEntryBytes = static_cast<uint32_t>(stagingShape.GetDim(1));
-            //tokenSizeBytesK: K 部分字节数，用于查 token_gva_table K/V 分拆.
-            // 默认 K = 2 * head_dim, V = 1 * head_dim → K 占总 2/3.
-            liqInfo.tokenSizeBytesK = ((opParamInfo_.tokenSizeBytesK != nullptr)
-            ? *opParamInfo_.tokenSizeBytesK
-            : liqInfo.kEntryBytes * 2 / 3);
+            liqInfo.tokenSizeBytesK = tokenSizeBytesK_;
             printf("[LIQ_TILING] prefetch enabled: prefetchCandidateMax=%u kEntryBytes=%u tokenSizeBytesK=%u\n",
                    liqInfo.prefetchCandidateMax, liqInfo.kEntryBytes, liqInfo.tokenSizeBytesK);
             fflush(stdout);

@@ -120,3 +120,24 @@ assert torch.unique(hit_slots).numel() == used
 assert torch.equal(staging.cpu()[hit_slots, :token_size_bytes_k], k_pool.cpu()[hit_tokens])
 assert torch.equal(staging.cpu()[hit_slots, token_size_bytes_k:], v_pool.cpu()[hit_tokens])
 print("=== Test 2b PASS ===")
+
+print("=== Test 3: 拒绝非法 K 字节数 ===")
+for invalid_k_bytes in (-1, 1, k_entry_bytes, k_entry_bytes + 1, 512, (1 << 32) + 256):
+    rejected = False
+    try:
+        run_op(token_gva_table=token_gva_table, prefetch_staging_buf=staging,
+               prefetch_slot_counter=counter, token_to_prefetch_slot=slot_map,
+               ema_threshold=1.0, token_size_bytes_k=invalid_k_bytes)
+    except RuntimeError:
+        rejected = True
+    assert rejected, f"invalid token_size_bytes_k accepted: {invalid_k_bytes}"
+torch.npu.synchronize()
+staging, counter, slot_map = make_prefetch_tensors()
+out3 = run_op(token_gva_table=token_gva_table, prefetch_staging_buf=staging,
+              prefetch_slot_counter=counter, token_to_prefetch_slot=slot_map, ema_threshold=1.0)
+check_out("[T3 default K]", out3)
+assert torch.equal((slot_map[0].cpu() >= 0).nonzero().flatten(), hit_tokens)
+default_slots = slot_map[0].cpu()[hit_tokens].long()
+assert torch.equal(staging.cpu()[default_slots, :token_size_bytes_k], k_pool.cpu()[hit_tokens])
+assert torch.equal(staging.cpu()[default_slots, token_size_bytes_k:], v_pool.cpu()[hit_tokens])
+print("=== Test 3 PASS ===")
