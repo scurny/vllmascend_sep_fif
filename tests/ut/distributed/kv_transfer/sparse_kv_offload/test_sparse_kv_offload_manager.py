@@ -855,14 +855,9 @@ class TestUpdateTokenGVATableRealImpl(unittest.TestCase):
 
 
 class TestCompletePrefetchStagingRealImpl(unittest.TestCase):
-    """NPU-dependent tests for the REAL complete_prefetch_staging implementation.
-    These exercise the actual H2D + gather + scatter + copy path on device.
-    Requires torch.npu.is_available() and a healthy NPU.
-    """
+    """Exercise the real gather/scatter implementation with CPU tensors."""
 
-    def setUp(self):
-        if not torch.npu.is_available():
-            self.skipTest("NPU not available")
+    device = "cpu"
 
     def _make_minimal_manager(
         self,
@@ -880,6 +875,7 @@ class TestCompletePrefetchStagingRealImpl(unittest.TestCase):
         complete_prefetch_staging touches."""
         mgr = SparseKVOffloadManager.__new__(SparseKVOffloadManager)
         mgr.tp_rank = 0
+        mgr.rank_local_host_pool = False
         mgr.num_layers = num_layers
         mgr.topk = topk
         mgr.topk_buffer_size = topk_buffer_size
@@ -891,7 +887,8 @@ class TestCompletePrefetchStagingRealImpl(unittest.TestCase):
         mgr.token_size_bytes_k = k_dim * 2
         mgr.token_size_bytes_v = v_dim * 2
         mgr.prefetch_candidate_max = topk * 2
-        dev = "npu:0"
+        dev = self.device
+        mgr.current_slots_npu = torch.arange(topk, dtype=torch.int32, device=dev).repeat(max_num_topk_rows, 1)
         # staging buffer: [prefetch_candidate_max, k_size + v_size] uint8
         k_entry = mgr.token_size_bytes_k + mgr.token_size_bytes_v
         mgr.prefetch_staging_buf = torch.zeros(
@@ -923,6 +920,41 @@ class TestCompletePrefetchStagingRealImpl(unittest.TestCase):
             device=dev,
         )
         return mgr
+
+    def test_prefetch_preserves_other_lru_hits_when_topk_order_changes(self):
+        # Given: A and B occupy physical slots 0 and 1; only B was prefetched.
+        mgr = self._make_minimal_manager(topk=2, k_dim=4, v_dim=4)
+        mgr.topk_buffers_k[0][0, 0].fill_(10)
+        mgr.topk_buffers_k[0][0, 1].fill_(20)
+        mgr.topk_buffers_v[0][0, 0].fill_(100)
+        mgr.topk_buffers_v[0][0, 1].fill_(200)
+        mgr.current_slots_npu[0] = torch.tensor([1, 0], dtype=torch.int32, device=self.device)
+        mgr.token_to_prefetch_slot[0, 1] = 0
+        mgr.prefetch_staging_buf[0, :8].view(torch.bfloat16).fill_(20)
+        mgr.prefetch_staging_buf[0, 8:].view(torch.bfloat16).fill_(200)
+
+        # When: this step selects B then A, both already resident.
+        mgr.complete_prefetch_staging(torch.tensor([[1, 0]], dtype=torch.int32), num_tokens=1, layer_id=0)
+
+        # Then: attention still reads B and A through the planner's slots.
+        slots = mgr.current_slots_npu[0].long()
+        self.assertEqual(mgr.topk_buffers_k[0][0, slots, 0, 0].tolist(), [20, 10])
+        self.assertEqual(mgr.topk_buffers_v[0][0, slots, 0, 0].tolist(), [200, 100])
+
+    def test_prefetch_does_not_write_unassigned_resident_slots(self):
+        # Given: the planner did not assign a resident slot for this top-k entry.
+        mgr = self._make_minimal_manager(topk=1, k_dim=4, v_dim=4)
+        mgr.current_slots_npu[0, 0] = -1
+        mgr.token_to_prefetch_slot[0, 5] = 0
+        mgr.prefetch_staging_buf[0].fill_(1)
+
+        # When: the token has a staging hit but no resident destination.
+        mgr.complete_prefetch_staging(torch.tensor([[5]], dtype=torch.int32), num_tokens=1, layer_id=0)
+
+        # Then: no resident memory is modified.
+        self.assertEqual(torch.count_nonzero(mgr.topk_buffers_k[0]).item(), 0)
+        self.assertEqual(torch.count_nonzero(mgr.topk_buffers_v[0]).item(), 0)
+
     def test_no_hits_returns_early(self):
         """All slots -1 → no hits → no scatter, buffers unchanged."""
         mgr = self._make_minimal_manager()
@@ -1032,6 +1064,14 @@ class TestCompletePrefetchStagingRealImpl(unittest.TestCase):
         self.assertTrue(torch.all(mgr.topk_buffers_k[0] == 0))
         # slot not cleared
         self.assertEqual(mgr.token_to_prefetch_slot[0, 5].item(), 0)
+
+
+class TestCompletePrefetchStagingNpu(TestCompletePrefetchStagingRealImpl):
+    device = "npu:0"
+
+    def setUp(self):
+        if not torch.npu.is_available():
+            self.skipTest("NPU not available")
 
 
 class TestStartPrefetchIntegration(unittest.TestCase):

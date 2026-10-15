@@ -1156,19 +1156,6 @@ class AscendSFAKVOffloadImpl(AscendSFAImpl):
             )
         decode_topk = topk_indices[:num_decode_tokens]
 
-        # ECHO-style prefetch completion: 将 indexer kernel 内 prefecth 到
-        # staging buffer 的 KV 拷贝到 resident (topk) buffer.
-        # 必须在 onload_topk_kv 之前调用，这样 LRU miss 计算只需处理剩余 miss token.
-        if self._prefetch_enabled and num_decode_tokens > 0:
-            layer_id = manager._get_offload_layer_id(layer_name)
-            topk_indices_cpu = decode_topk.contiguous().cpu()
-            manager.complete_prefetch_staging(
-                topk_indices_cpu=topk_indices_cpu,
-                num_tokens=num_decode_tokens,
-                layer_id=layer_id,
-                token_to_req=token_to_req,
-                capturing=self._in_graph_runtime(),
-            )
         if run_lru_plan:
             if decode_topk.ndim == 3 and decode_topk.shape[1] == 1:
                 decode_topk = decode_topk.squeeze(1)
@@ -1217,6 +1204,15 @@ class AscendSFAKVOffloadImpl(AscendSFAImpl):
             capturing=self._in_graph_runtime(),
             skip_topk=self.skip_topk,
         )
+        if self._prefetch_enabled and num_decode_tokens > 0:
+            topk_indices_cpu = decode_topk.contiguous().cpu()
+            manager.complete_prefetch_staging(
+                topk_indices_cpu=topk_indices_cpu,
+                num_tokens=num_decode_tokens,
+                layer_id=layer_id,
+                token_to_req=token_to_req,
+                capturing=self._in_graph_runtime(),
+            )
         decode_attn_output = DeviceOperator.execute_sparse_flash_attention_process(
             self,
             ql_nope[:num_decode_tokens],

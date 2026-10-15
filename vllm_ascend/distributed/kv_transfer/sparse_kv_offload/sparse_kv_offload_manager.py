@@ -916,7 +916,7 @@ class SparseKVOffloadManager:
         token_to_req: torch.Tensor | None = None,
         capturing: bool = False,
     ) -> None:
-        """After indexer kernel: copy prefetch hits from staging to resident."""
+        """After LRU onload: copy prefetch hits to the assigned resident slots."""
         if not (self.tp_rank == 0 or self.rank_local_host_pool):
             return
         if self.num_layers == 0 or layer_id >= self.num_layers:
@@ -929,24 +929,25 @@ class SparseKVOffloadManager:
         staging = self.prefetch_staging_buf
         topk_k = self.topk_buffers_k[layer_id]
         topk_v = self.topk_buffers_v[layer_id]
-        topk_indices_npu = topk_indices_cpu[:num_tokens].to("npu", non_blocking=True)
+        topk_indices_npu = topk_indices_cpu[:num_tokens].to(topk_k.device, non_blocking=True)
         flat_slots = self.token_to_prefetch_slot.view(-1)
         flat_topk = topk_indices_npu.reshape(-1).to(torch.int64)
         if token_to_req is not None:
-            token_req = token_to_req[:num_tokens].to(device="npu", dtype=torch.int64, non_blocking=True)
+            token_req = token_to_req[:num_tokens].to(device=topk_k.device, dtype=torch.int64, non_blocking=True)
             token_bases = token_req * self.token_to_prefetch_slot.shape[1]
             token_bases_expanded = token_bases.unsqueeze(1).expand(-1, self.topk).reshape(-1)
             global_topk = token_bases_expanded + flat_topk
         else:
             global_topk = flat_topk
         hit_slots = flat_slots[global_topk]
-        hit_mask = hit_slots >= 0
+        resident_slots = self.current_slots_npu[:num_tokens].reshape(-1)
+        hit_mask = (hit_slots >= 0) & (resident_slots >= 0) & (resident_slots < topk_k.shape[1])
         num_hits = int(torch.sum(hit_mask).item())
         if num_hits == 0:
             return
         hit_linear = torch.where(hit_mask)[0]
         hit_rows = hit_linear // self.topk
-        hit_cols = hit_linear % self.topk
+        hit_cols = resident_slots[hit_linear].to(torch.int64)
         hit_slot_values = hit_slots[hit_linear]
         staging_k = staging[:, :k_size].view(topk_k.dtype).reshape(self.prefetch_candidate_max, -1)
         staging_v = staging[:, k_size:].view(topk_v.dtype).reshape(self.prefetch_candidate_max, -1)
