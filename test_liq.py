@@ -87,9 +87,10 @@ def make_prefetch_tensors():
 
 
 # ---------------- Test 2a: prefetch 开启但零触发 ----------------
+prefetch_hits_per_row = 4
 query.fill_(1)
 key.zero_()
-key.view(-1, D)[256:320].fill_(1)
+key.view(-1, D)[256:256 + prefetch_hits_per_row].fill_(1)
 weights.fill_(1)
 query_dequant_scale.fill_(1)
 key_dequant_scale.fill_(1)
@@ -112,9 +113,9 @@ out2b = run_op(token_gva_table=token_gva_table, prefetch_staging_buf=staging,
 check_out("[T2b]", out2b)
 used = int((slot_map[0] != -1).sum().item())
 print("[T2b] used slots:", used)
-assert used == 64, used
+assert used == prefetch_hits_per_row, used
 hit_tokens = (slot_map[0].cpu() >= 0).nonzero().flatten()
-assert torch.equal(hit_tokens, torch.arange(256, 320))
+assert torch.equal(hit_tokens, torch.arange(256, 256 + prefetch_hits_per_row))
 hit_slots = slot_map[0].cpu()[hit_tokens].long()
 assert torch.unique(hit_slots).numel() == used
 assert torch.equal(staging.cpu()[hit_slots, :token_size_bytes_k], k_pool.cpu()[hit_tokens])
@@ -141,3 +142,29 @@ default_slots = slot_map[0].cpu()[hit_tokens].long()
 assert torch.equal(staging.cpu()[default_slots, :token_size_bytes_k], k_pool.cpu()[hit_tokens])
 assert torch.equal(staging.cpu()[default_slots, token_size_bytes_k:], v_pool.cpu()[hit_tokens])
 print("=== Test 3 PASS ===")
+
+print("=== Test 4: 多行预取槽位不覆盖 ===")
+S1 = 4
+query = torch.zeros((S1, N1, D), dtype=torch.int8, device='npu')
+weights = torch.ones((S1, N1), dtype=torch.float16, device='npu')
+query_dequant_scale = torch.ones_like(weights)
+actual_seq_lengths_query = torch.tensor([S1], dtype=torch.int32, device='npu')
+key.zero_()
+for row in range(S1):
+    query[row, :, row] = 1
+    start = 256 + row * prefetch_hits_per_row
+    key.view(-1, D)[start:start + prefetch_hits_per_row, row] = 1
+expected_tokens = torch.arange(256, 256 + S1 * prefetch_hits_per_row)
+for iteration in range(2):
+    staging, counter, slot_map = make_prefetch_tensors()
+    out4 = run_op(token_gva_table=token_gva_table, prefetch_staging_buf=staging,
+                  prefetch_slot_counter=counter, token_to_prefetch_slot=slot_map,
+                  ema_threshold=1.0, token_size_bytes_k=token_size_bytes_k)
+    check_out(f"[T4 iteration {iteration}]", out4)
+    hit_tokens = (slot_map[0].cpu() >= 0).nonzero().flatten()
+    assert torch.equal(hit_tokens, expected_tokens)
+    hit_slots = slot_map[0].cpu()[hit_tokens].long()
+    assert torch.unique(hit_slots).numel() == expected_tokens.numel()
+    assert torch.equal(staging.cpu()[hit_slots, :token_size_bytes_k], k_pool.cpu()[hit_tokens])
+    assert torch.equal(staging.cpu()[hit_slots, token_size_bytes_k:], v_pool.cpu()[hit_tokens])
+print("=== Test 4 PASS ===")

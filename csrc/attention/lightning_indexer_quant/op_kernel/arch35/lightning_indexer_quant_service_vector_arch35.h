@@ -122,6 +122,7 @@ private:
     uint32_t prefetchCandidateMax_ = 0;
     uint32_t kEntryBytes_ = 0;
     uint32_t tokenSizeBytesK_ = 0;
+    int32_t prefetchSlotsUsed_ = 0;
     TBuf<TPosition::VECCALC> prefetchUbBuf_;
     LocalTensor<uint8_t> prefetchUbLocal_;
     TBuf<TPosition::VECCALC> cmpMaskBuf_;
@@ -255,6 +256,7 @@ __aicore__ inline void LIQVector<LIQT>::InitParams(const struct LIQCommon::Const
     prefetchCandidateMax_ = constInfo.prefetchCandidateMax;
     kEntryBytes_ = constInfo.kEntryBytes;
     tokenSizeBytesK_ = constInfo.tokenSizeBytesK;
+    prefetchSlotsUsed_ = 0;
 }
 
 template <typename LIQT>
@@ -316,8 +318,6 @@ __aicore__ inline void LIQVector<LIQT>::PrefetchScoresInVec1(
     }
 
     int32_t coreSlotBase = blockId_ * slotsPerCore;
-    int32_t coreSlotEnd = coreSlotBase + slotsPerCore;
-    int32_t localSlot = coreSlotBase;
 
     // CompareScalar: scoresUb > emaThreshold → bitmask
     uint32_t cmpLenAlign = LIQCommon::Align(cuS2Len, (uint32_t)32);
@@ -344,12 +344,11 @@ __aicore__ inline void LIQVector<LIQT>::PrefetchScoresInVec1(
     }
 
     // 检查核内 slot capacity
-    int32_t slotStart = localSlot;
-    localSlot += static_cast<int32_t>(validInRow);
-
-    if (slotStart + static_cast<int32_t>(validInRow) > coreSlotEnd) {
+    if (static_cast<int32_t>(validInRow) > slotsPerCore - prefetchSlotsUsed_) {
         return;  // 放弃这行
     }
+    int32_t slotStart = coreSlotBase + prefetchSlotsUsed_;
+    prefetchSlotsUsed_ += static_cast<int32_t>(validInRow);
 
     //---- 跨 request 偏移: tokenGvaTable/tokenToPrefetchSlot layout 为 [num_reqs, max_tokens, *] ----
     int64_t reqTokenBase = static_cast<int64_t>(info.bIdx) * static_cast<int64_t>(constInfo_.kSeqSize);
