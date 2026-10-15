@@ -15,6 +15,8 @@
 
 #include "lightning_indexer_quant_tiling.h"
 
+#include <cstdio>
+
 #include "../op_kernel/lightning_indexer_quant_template_tiling_key.h"
 
 using namespace ge;
@@ -103,8 +105,12 @@ ge::graphStatus LIQInfoParser::GetNpuInfo()
     OPS_ERR_IF(aicNum == 0 || aivNum == 0, OPS_LOG_E(opName_, "num of core obtained is 0."), return GRAPH_FAILED);
 
     socVersion_ = ascendcPlatform.GetSocVersion();
+    printf("[LIQ_TILING] GetNpuInfo: socVersion=%d aivNum=%u aicNum=%u\n", static_cast<int32_t>(socVersion_), aivNum,
+           aicNum);
+    fflush(stdout);
     if ((socVersion_ != platform_ascendc::SocVersion::ASCEND910B) &&
-        (socVersion_ != platform_ascendc::SocVersion::ASCEND910_93)) {
+        (socVersion_ != platform_ascendc::SocVersion::ASCEND910_93) &&
+        (socVersion_ != platform_ascendc::SocVersion::ASCEND950)) {
         OPS_LOG_E(opName_, "SOC Version[%d] is not support.", (int32_t)socVersion_);
         return GRAPH_FAILED;
     }
@@ -732,6 +738,15 @@ void LIQInfoParser::GenerateInfo(LIQTilingInfo &liqInfo)
 
     // ---- ECHO-style prefetch ----
     liqInfo.emaThreshold = (opParamInfo_.emaThreshold != nullptr) ? *opParamInfo_.emaThreshold : 0.0f;
+    printf("[LIQ_TILING] GenerateInfo: emaThreshold=%f stagingBuf=%s gvaTable=%s counter=%s slot=%s "
+           "tokenSizeBytesKAttr=%s\n",
+           liqInfo.emaThreshold,
+           opParamInfo_.prefetchStagingBuf.tensor != nullptr ? "present" : "null",
+           opParamInfo_.tokenGvaTable.tensor != nullptr ? "present" : "null",
+           opParamInfo_.prefetchSlotCounter.tensor != nullptr ? "present" : "null",
+           opParamInfo_.tokenToPrefetchSlot.tensor != nullptr ? "present" : "null",
+           opParamInfo_.tokenSizeBytesK != nullptr ? "present" : "null");
+    fflush(stdout);
     if (opParamInfo_.prefetchStagingBuf.tensor != nullptr && liqInfo.emaThreshold > 0.0f) {
         auto &stagingShape = opParamInfo_.prefetchStagingBuf.tensor->GetStorageShape();
         if (stagingShape.GetDimNum() >= 2) {
@@ -742,6 +757,9 @@ void LIQInfoParser::GenerateInfo(LIQTilingInfo &liqInfo)
             liqInfo.tokenSizeBytesK = ((opParamInfo_.tokenSizeBytesK != nullptr)
             ? *opParamInfo_.tokenSizeBytesK
             : liqInfo.kEntryBytes * 2 / 3);
+            printf("[LIQ_TILING] prefetch enabled: prefetchCandidateMax=%u kEntryBytes=%u tokenSizeBytesK=%u\n",
+                   liqInfo.prefetchCandidateMax, liqInfo.kEntryBytes, liqInfo.tokenSizeBytesK);
+            fflush(stdout);
         }
     }
 }
@@ -852,15 +870,22 @@ ge::graphStatus LightningIndexerQuantTiling::DoTiling(LIQTilingInfo *tilingInfo)
 // --------------------------Tiling函数定义---------------------------
 ge::graphStatus TilingForLightningIndexerQuant(gert::TilingContext *context)
 {
+    printf("[LIQ_TILING] enter TilingForLightningIndexerQuant\n");
+    fflush(stdout);
     OPS_ERR_IF(context == nullptr, OPS_REPORT_VECTOR_INNER_ERR("LightningIndexerQuant", "Tiling context is null."),
                return ge::GRAPH_FAILED);
     LIQTilingInfo liqInfo;
     LIQInfoParser LIQInfoParser(context);
     if (LIQInfoParser.ParseAndCheck(liqInfo) != ge::GRAPH_SUCCESS) {
+        printf("[LIQ_TILING] ParseAndCheck FAILED\n");
+        fflush(stdout);
         return ge::GRAPH_FAILED;
     }
     LightningIndexerQuantTiling liqTiling(context);
-    return liqTiling.DoTiling(&liqInfo);
+    auto ret = liqTiling.DoTiling(&liqInfo);
+    printf("[LIQ_TILING] DoTiling ret=%d\n", static_cast<int32_t>(ret));
+    fflush(stdout);
+    return ret;
 }
 
 // --------------------------Tiling及函数TilingPrepare函数注册--------

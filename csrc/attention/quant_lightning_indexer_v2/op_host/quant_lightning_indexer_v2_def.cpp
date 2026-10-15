@@ -81,7 +81,7 @@ public:
         // ---- ECHO-style prefetch inputs (OPTIONAL) ----
         this->Input("token_gva_table")
             .ParamType(OPTIONAL)
-            .DataTypeList({ge::DT_UINT64})
+            .DataTypeList({ge::DT_UINT64, ge::DT_INT64})
             .FormatList({ge::FORMAT_ND})
             .AutoContiguous();
         this->Input("prefetch_staging_buf")
@@ -202,7 +202,7 @@ public:
         // ---- ECHO-style prefetch inputs (OPTIONAL, A5 950) ----
         aicore_config_95.Input("token_gva_table")
             .ParamType(OPTIONAL)
-            .DataTypeList({ge::DT_UINT64})
+            .DataTypeList({ge::DT_UINT64, ge::DT_INT64})
             .FormatList({ge::FORMAT_ND})
             .AutoContiguous();
         aicore_config_95.Input("prefetch_staging_buf")

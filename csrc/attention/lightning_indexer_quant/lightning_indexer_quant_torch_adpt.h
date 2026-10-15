@@ -15,6 +15,7 @@
  */
 #ifndef LIGHTING_INDEXER_QUANT_VLLM_TORCH_ADPT_H
 #define LIGHTING_INDEXER_QUANT_VLLM_TORCH_ADPT_H
+#include <cstdio>
 namespace vllm_ascend {
 
 at::Tensor npu_lightning_indexer_quant(
@@ -31,6 +32,8 @@ at::Tensor npu_lightning_indexer_quant(
     const c10::optional<at::Tensor> &token_to_prefetch_slot,
     double ema_threshold, int64_t token_size_bytes_k)
 {
+    fprintf(stderr, "[LIQ_ADPT] enter npu_lightning_indexer_quant (adpt built %s %s)\n", __DATE__, __TIME__);
+    fflush(stderr);
     std::string query_layout_str = std::string(layout_query);
     std::string key_layout_str = std::string(layout_key);
 
@@ -64,7 +67,26 @@ at::Tensor npu_lightning_indexer_quant(
 
     //---- ECHO-style prefetch: 局部变量，避免 rvalue 绑定非 const 引用 ----
     float ema_threshold_val = static_cast<float>(ema_threshold);
-    uint32_t token_size_bytes_k_val = static_cast<uint32_t>(token_size_bytes_k);
+    int64_t token_size_bytes_k_val = token_size_bytes_k;
+    // NOTE: EXEC_NPU_CMD 按位置直接调用生成的 aclnnLightningIndexerQuantGetWorkspaceSize,
+    // 参数顺序必须与 op_host/lightning_indexer_quant_def.cpp 中的声明顺序完全一致:
+    // 先全部 inputs(query...block_table + 4 个 prefetch 输入), 再全部 attrs, 最后 output。
+    fprintf(stderr,
+            "[LIQ_ADPT] before EXEC_NPU_CMD: q=[%ld,%ld,%ld] k=[%ld,%ld,%ld,%ld] layout=%s/%s "
+            "sparse_count=%ld sparse_mode=%ld ema=%f tskb=%ld "
+            "has_gva=%d has_staging=%d has_counter=%d has_slot=%d\n",
+            (long)query.size(0), query.dim() > 1 ? (long)query.size(1) : -1,
+            query.dim() > 2 ? (long)query.size(2) : -1,
+            (long)key.size(0), (long)key.size(1), (long)key.size(2),
+            key.dim() > 3 ? (long)key.size(3) : -1,
+            query_layout_str.c_str(), key_layout_str.c_str(),
+            (long)sparse_count, (long)sparse_mode, ema_threshold_val,
+            (long)token_size_bytes_k_val,
+            token_gva_table.has_value() ? 1 : 0,
+            prefetch_staging_buf.has_value() ? 1 : 0,
+            prefetch_slot_counter.has_value() ? 1 : 0,
+            token_to_prefetch_slot.has_value() ? 1 : 0);
+    fflush(stderr);
     EXEC_NPU_CMD(aclnnLightningIndexerQuant,
     query,
     key,
@@ -74,20 +96,25 @@ at::Tensor npu_lightning_indexer_quant(
     actual_seq_lengths_query,
     actual_seq_lengths_key,
     block_table,
+    token_gva_table,
+    prefetch_staging_buf,
+    prefetch_slot_counter,
+    token_to_prefetch_slot,
     query_quant_mode,
     key_quant_mode,
     query_layout_ptr,
     key_layout_ptr,
     sparse_count,
     sparse_mode,
-    token_gva_table,
-    prefetch_staging_buf,
-    prefetch_slot_counter,
-    token_to_prefetch_slot,
     ema_threshold_val,
     token_size_bytes_k_val,
     lightning_indexer_quant_output
     );
+    fprintf(stderr, "[LIQ_ADPT] after EXEC_NPU_CMD: out=[%ld,%ld,%ld]\n",
+            (long)lightning_indexer_quant_output.size(0),
+            lightning_indexer_quant_output.dim() > 1 ? (long)lightning_indexer_quant_output.size(1) : -1,
+            lightning_indexer_quant_output.dim() > 2 ? (long)lightning_indexer_quant_output.size(2) : -1);
+    fflush(stderr);
 
     return lightning_indexer_quant_output;
 

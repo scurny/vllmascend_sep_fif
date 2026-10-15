@@ -1210,10 +1210,10 @@ std::tuple<at::Tensor, at::Tensor> npu_quant_lightning_indexer_v2_compat_npu(
     const c10::optional<at::Tensor> &metadata,
     int64_t max_seqlen_q, c10::string_view layout_q, c10::string_view layout_k,
     int64_t mask_mode, int64_t cmp_ratio, int64_t return_value,
-    const c10::optionalat::Tensor &token_gva_table,
-    const c10::optionalat::Tensor &prefetch_staging_buf,
-    const c10::optionalat::Tensor &prefetch_slot_counter,
-    const c10::optionalat::Tensor &token_to_prefetch_slot,
+    const c10::optional<at::Tensor> &token_gva_table,
+    const c10::optional<at::Tensor> &prefetch_staging_buf,
+    const c10::optional<at::Tensor> &prefetch_slot_counter,
+    const c10::optional<at::Tensor> &token_to_prefetch_slot,
     double ema_threshold, int64_t token_size_bytes_k)
 {
     TORCH_CHECK(return_value == 0, "npu_quant_lightning_indexer_v2 only supports return_value=0");

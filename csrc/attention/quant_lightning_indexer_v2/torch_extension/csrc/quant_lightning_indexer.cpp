@@ -193,11 +193,16 @@ std::tuple<at::Tensor, at::Tensor> QuantLightningIndexer(
 
     int64_t keyStride0Disabled = 0;   // A11: 旧入口不启用 stride 显式属性 (保持现网行为)
     int64_t keyScaleStride0Disabled = 0;
+    // def 新增 candidate_topk_index / 4 个 prefetch 可选输入与 ema_threshold attr, 按空输入传入
+    const c10::optional<at::Tensor> noCandidateTensor;
+    const c10::optional<at::Tensor> noPrefetchTensor;
+    float emaThresholdVal = 0.0f;
     ACLNN_CMD(aclnnQuantLightningIndexerV2, queryWrapper, keyWrapper, weights, queryScaleWrapper, keyScaleWrapper,
-              cuSeqlensQ, cuSeqlensK, sequsedQ, sequsedK, cmpResidualK, blockTable, outputIdxOffset, metadata, topk,
+              cuSeqlensQ, cuSeqlensK, sequsedQ, sequsedK, cmpResidualK, blockTable, outputIdxOffset, metadata,
+              noCandidateTensor, noPrefetchTensor, noPrefetchTensor, noPrefetchTensor, noPrefetchTensor, topk,
               quantMode, maxSeqlenQ, queryLayoutPtr, keyLayoutPtr, maskMode, cmpRatio, returnValue,
-              keyStride0Disabled, keyScaleStride0Disabled, sparseIndicesOut,
-              sparseValuesOut);
+              keyStride0Disabled, keyScaleStride0Disabled, emaThresholdVal, sparseIndicesOut,
+              sparseValuesOut, noPrefetchTensor);
 
     return std::tuple<at::Tensor, at::Tensor>(sparseIndicesOut, sparseValuesOut);
 }
@@ -255,11 +260,15 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> QuantLightningIndexerCandidate(
     int64_t keyStride0 = key.stride(0);
     int64_t keyScaleStride0 = keyDequantScale.stride(0);
 
+    // v2 def 新增 4 个 prefetch 可选输入与 ema_threshold attr, 此扩展入口未暴露, 按空输入传入
+    const c10::optional<at::Tensor> noPrefetchTensor;
+    float emaThresholdVal = 0.0f;
     ACLNN_CMD(aclnnQuantLightningIndexerV2, queryWrapper, keyWrapper, weights, queryScaleWrapper, keyScaleWrapper,
               cuSeqlensQ, cuSeqlensK, sequsedQ, sequsedK, cmpResidualK, blockTable, outputIdxOffset,
-              metadata, candidateTopkIndexIn, topk, quantMode, maxSeqlenQ, queryLayoutPtr, keyLayoutPtr, maskMode,
+              metadata, candidateTopkIndexIn, noPrefetchTensor, noPrefetchTensor, noPrefetchTensor, noPrefetchTensor,
+              topk, quantMode, maxSeqlenQ, queryLayoutPtr, keyLayoutPtr, maskMode,
               cmpRatio, returnValue, candidateMode, candidateTopkBlocks, candidateBlockSize, keyStride0,
-              keyScaleStride0, sparseIndicesOut, sparseValuesOut, candidateTopkIndexOut);
+              keyScaleStride0, emaThresholdVal, sparseIndicesOut, sparseValuesOut, candidateTopkIndexOut);
 
     return std::tuple<at::Tensor, at::Tensor, at::Tensor>(sparseIndicesOut, sparseValuesOut, candidateTopkIndexOut);
 }

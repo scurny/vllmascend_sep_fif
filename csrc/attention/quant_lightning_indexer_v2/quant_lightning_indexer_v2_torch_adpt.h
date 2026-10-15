@@ -10,6 +10,8 @@
 
 #pragma once
 
+#include <cstdio>
+
 namespace vllm_ascend::qli_v2 {
 constexpr int SIZE = 8;
 constexpr int DIM_0 = 0;
@@ -107,7 +109,10 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> QuantLightningIndexerCandidate(
     const c10::optional<at::Tensor> &blockTable, const c10::optional<at::Tensor> &outputIdxOffset,
     const c10::optional<at::Tensor> &metadata, int64_t maxSeqlenQ, c10::string_view layoutQ,
     c10::string_view layoutK, int64_t maskMode, int64_t cmpRatio, int64_t candidateMode,
-    int64_t candidateTopkBlocks, int64_t candidateBlockSize)
+    int64_t candidateTopkBlocks, int64_t candidateBlockSize,
+    const c10::optional<at::Tensor> &tokenGvaTable, const c10::optional<at::Tensor> &prefetchStagingBuf,
+    const c10::optional<at::Tensor> &prefetchSlotCounter, const c10::optional<at::Tensor> &tokenToPrefetchSlot,
+    double emaThreshold, int64_t tokenSizeBytesK)
 {
     TORCH_CHECK(query.numel() > 0, "Tensor query is empty.")
     TORCH_CHECK(key.numel() > 0, "Tensor key is empty.")
@@ -151,12 +156,27 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> QuantLightningIndexerCandidate(
     // 从 key/k_scale 的 torch stride(0) 自动显式传入 (紧凑存储时等于紧凑值, 走 kernel 兜底语义)
     int64_t keyStride0 = key.stride(0);
     int64_t keyScaleStride0 = keyDequantScale.stride(0);
+    // v2 算子 def 未声明 token_size_bytes_k attr, 由 tiling 按 staging buf 形状推导, 此处仅接收不入参
+    (void)tokenSizeBytesK;
+    float emaThresholdVal = static_cast<float>(emaThreshold);
 
+    fprintf(stderr,
+            "[QLI_V2_ADPT] before EXEC_NPU_CMD: topk=%ld quantMode=%ld layout=%s/%s ema=%f "
+            "has_gva=%d has_staging=%d has_counter=%d has_slot=%d\n",
+            (long)topk, (long)quantMode, queryLayoutStr.c_str(), keyLayoutStr.c_str(), emaThresholdVal,
+            tokenGvaTable.has_value() ? 1 : 0, prefetchStagingBuf.has_value() ? 1 : 0,
+            prefetchSlotCounter.has_value() ? 1 : 0, tokenToPrefetchSlot.has_value() ? 1 : 0);
+    fflush(stderr);
+    // NOTE: 参数顺序必须与 quant_lightning_indexer_v2_def.cpp 声明顺序一致:
+    // 全部 inputs(含 4 个 prefetch 输入) → 全部 attrs(ema_threshold 在最后) → 全部 outputs
     EXEC_NPU_CMD(aclnnQuantLightningIndexerV2, query, key, weights, queryDequantScale, keyDequantScale,
               cuSeqlensQ, cuSeqlensK, sequsedQ, sequsedK, cmpResidualK, blockTable, outputIdxOffset,
-              metadata, candidateTopkIndexIn, topk, quantMode, maxSeqlenQ, queryLayoutPtr, keyLayoutPtr, maskMode,
+              metadata, candidateTopkIndexIn, tokenGvaTable, prefetchStagingBuf, prefetchSlotCounter,
+              tokenToPrefetchSlot, topk, quantMode, maxSeqlenQ, queryLayoutPtr, keyLayoutPtr, maskMode,
               cmpRatio, returnValue, candidateMode, candidateTopkBlocks, candidateBlockSize, keyStride0,
-              keyScaleStride0, sparseIndicesOut, sparseValuesOut, candidateTopkIndexOut);
+              keyScaleStride0, emaThresholdVal, sparseIndicesOut, sparseValuesOut, candidateTopkIndexOut);
+    fprintf(stderr, "[QLI_V2_ADPT] after EXEC_NPU_CMD\n");
+    fflush(stderr);
 
     return std::tuple<at::Tensor, at::Tensor, at::Tensor>(sparseIndicesOut, sparseValuesOut, candidateTopkIndexOut);
 }
