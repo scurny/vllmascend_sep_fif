@@ -932,16 +932,27 @@ class SparseKVOffloadManager:
         topk_indices_npu = topk_indices_cpu[:num_tokens].to(topk_k.device, non_blocking=True)
         flat_slots = self.token_to_prefetch_slot.view(-1)
         flat_topk = topk_indices_npu.reshape(-1).to(torch.int64)
+        row_width = self.token_to_prefetch_slot.shape[1]
+        valid_indices = (flat_topk >= 0) & (flat_topk < min(row_width, self.max_model_len))
         if token_to_req is not None:
             token_req = token_to_req[:num_tokens].to(device=topk_k.device, dtype=torch.int64, non_blocking=True)
-            token_bases = token_req * self.token_to_prefetch_slot.shape[1]
+            valid_requests = (token_req >= 0) & (token_req < self.token_to_prefetch_slot.shape[0])
+            valid_indices &= valid_requests.unsqueeze(1).expand(-1, self.topk).reshape(-1)
+            token_bases = token_req * row_width
             token_bases_expanded = token_bases.unsqueeze(1).expand(-1, self.topk).reshape(-1)
             global_topk = token_bases_expanded + flat_topk
         else:
             global_topk = flat_topk
+        global_topk = torch.where(valid_indices, global_topk, 0)
         hit_slots = flat_slots[global_topk]
         resident_slots = self.current_slots_npu[:num_tokens].reshape(-1)
-        hit_mask = (hit_slots >= 0) & (resident_slots >= 0) & (resident_slots < topk_k.shape[1])
+        hit_mask = (
+            valid_indices
+            & (hit_slots >= 0)
+            & (hit_slots < self.prefetch_candidate_max)
+            & (resident_slots >= 0)
+            & (resident_slots < topk_k.shape[1])
+        )
         num_hits = int(torch.sum(hit_mask).item())
         if num_hits == 0:
             return

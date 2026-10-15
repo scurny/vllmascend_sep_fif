@@ -955,6 +955,52 @@ class TestCompletePrefetchStagingRealImpl(unittest.TestCase):
         self.assertEqual(torch.count_nonzero(mgr.topk_buffers_k[0]).item(), 0)
         self.assertEqual(torch.count_nonzero(mgr.topk_buffers_v[0]).item(), 0)
 
+    def test_invalid_topk_does_not_read_or_clear_another_request(self):
+        for token in (-1, 129, 255, 256, 2**63 - 1):
+            with self.subTest(token=token):
+                mgr = self._make_minimal_manager(topk=1, k_dim=4, v_dim=4, max_model_len=129)
+                mgr.token_to_prefetch_slot.fill_(0)
+                mgr.prefetch_staging_buf[0].fill_(1)
+                original_map = mgr.token_to_prefetch_slot.clone()
+
+                mgr.complete_prefetch_staging(
+                    torch.tensor([[token]], dtype=torch.int64),
+                    num_tokens=1,
+                    layer_id=0,
+                    token_to_req=torch.tensor([1], dtype=torch.int32),
+                )
+
+                self.assertTrue(torch.equal(mgr.token_to_prefetch_slot, original_map))
+                self.assertEqual(torch.count_nonzero(mgr.topk_buffers_k[0]).item(), 0)
+                self.assertEqual(torch.count_nonzero(mgr.topk_buffers_v[0]).item(), 0)
+
+    def test_invalid_request_does_not_access_slot_map(self):
+        for request in (-1, 2, 2**62):
+            with self.subTest(request=request):
+                mgr = self._make_minimal_manager(topk=1, k_dim=4, v_dim=4)
+                mgr.token_to_prefetch_slot.fill_(0)
+                mgr.prefetch_staging_buf[0].fill_(1)
+                original_map = mgr.token_to_prefetch_slot.clone()
+
+                mgr.complete_prefetch_staging(
+                    torch.tensor([[0]], dtype=torch.int32),
+                    num_tokens=1,
+                    layer_id=0,
+                    token_to_req=torch.tensor([request], dtype=torch.int64),
+                )
+
+                self.assertTrue(torch.equal(mgr.token_to_prefetch_slot, original_map))
+                self.assertEqual(torch.count_nonzero(mgr.topk_buffers_k[0]).item(), 0)
+
+    def test_out_of_range_staging_slot_is_not_copied(self):
+        mgr = self._make_minimal_manager(topk=1, k_dim=4, v_dim=4)
+        mgr.token_to_prefetch_slot[0, 5] = mgr.prefetch_candidate_max
+
+        mgr.complete_prefetch_staging(torch.tensor([[5]], dtype=torch.int32), num_tokens=1, layer_id=0)
+
+        self.assertEqual(torch.count_nonzero(mgr.topk_buffers_k[0]).item(), 0)
+        self.assertEqual(mgr.token_to_prefetch_slot[0, 5].item(), mgr.prefetch_candidate_max)
+
     def test_no_hits_returns_early(self):
         """All slots -1 → no hits → no scatter, buffers unchanged."""
         mgr = self._make_minimal_manager()
