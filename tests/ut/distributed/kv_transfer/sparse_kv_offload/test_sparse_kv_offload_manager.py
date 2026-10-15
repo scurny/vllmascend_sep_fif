@@ -964,9 +964,9 @@ class TestCompletePrefetchStagingRealImpl(unittest.TestCase):
         # miss slot untouched
         self.assertEqual(mgr.token_to_prefetch_slot[0, 12].item(), -1)
         
-    def test_multi_request_offset(self):
-        """Two requests: token_to_req gives cross-request offset."""
-        mgr = self._make_minimal_manager(topk=1, k_dim=4, v_dim=4, max_model_len=128)
+    def test_multi_request_offset_uses_padded_slot_table_width(self):
+        mgr = self._make_minimal_manager(topk=1, k_dim=4, v_dim=4, max_model_len=129)
+        self.assertEqual(mgr.token_to_prefetch_slot.shape[1], 256)
         k_size = mgr.token_size_bytes_k
         v_size = mgr.token_size_bytes_v
         # req0 has topk hit at local pos 5 → staging slot 0

@@ -934,7 +934,7 @@ class SparseKVOffloadManager:
         flat_topk = topk_indices_npu.reshape(-1).to(torch.int64)
         if token_to_req is not None:
             token_req = token_to_req[:num_tokens].to(device="npu", dtype=torch.int64, non_blocking=True)
-            token_bases = token_req * self.max_model_len
+            token_bases = token_req * self.token_to_prefetch_slot.shape[1]
             token_bases_expanded = token_bases.unsqueeze(1).expand(-1, self.topk).reshape(-1)
             global_topk = token_bases_expanded + flat_topk
         else:
