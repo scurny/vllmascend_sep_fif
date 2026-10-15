@@ -637,7 +637,10 @@ __aicore__ inline void LIQPreload<LIQT>::ProcessMain()
         CrossCoreSetFlag<LIQCommon::ConstInfo::FIA_SYNC_MODE2, PIPE_FIX>(constInfo.syncC1V0);
     }
 
-    LIQCommon::RunInfo runInfo[LI_QUANT_PRELOAD_TASK_CACHE_SIZE];
+    // 必须零初始化: ProcessBaseBlock 首次迭代会读 lastRunInfo(另一个 slot)的 isValid,
+    // 未初始化时为栈垃圾, 会用全垃圾的 RunInfo(含 indiceOutOffset 等 int64 偏移)跑
+    // ProcessVec1, 导致 MTE DDR 地址越界(aivec error 95)与同步超时。
+    LIQCommon::RunInfo runInfo[LI_QUANT_PRELOAD_TASK_CACHE_SIZE] = {};
 
     uint32_t gloop = 0;
     for (uint32_t bN2LoopIdx = splitCoreInfo.bN2Start; bN2LoopIdx <= splitCoreInfo.bN2End; bN2LoopIdx++) {
