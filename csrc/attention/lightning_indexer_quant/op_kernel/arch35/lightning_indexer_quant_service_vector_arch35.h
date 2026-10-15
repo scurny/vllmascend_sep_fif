@@ -321,8 +321,10 @@ __aicore__ inline void LIQVector<LIQT>::PrefetchScoresInVec1(
 
     // CompareScalar: scoresUb > emaThreshold → bitmask
     uint32_t cmpLenAlign = LIQCommon::Align(cuS2Len, (uint32_t)32);
+    SetWaitFlag<HardEvent::S_V>(HardEvent::S_V);
     AscendC::CompareScalar(cmpMaskUb_, scoresUb, static_cast<float>(constInfo_.emaThreshold),
     AscendC::CMPMODE::GT, cmpLenAlign);
+    SetWaitFlag<HardEvent::V_S>(HardEvent::V_S);
 
     // 收集超过阈值的 position
     constexpr uint32_t MAX_PREFETCH_POSITIONS = 256;
@@ -373,15 +375,18 @@ __aicore__ inline void LIQVector<LIQT>::PrefetchScoresInVec1(
         // 3. GVA→UB: 先 K 再 V
         GlobalTensor<uint8_t> srcGmK;
         srcGmK.SetGlobalBuffer(reinterpret_cast<__gm__ uint8_t *>(gvaK));
+        SetWaitFlag<HardEvent::S_MTE2>(HardEvent::S_MTE2);
         AscendC::DataCopyPad(prefetchUbLocal_, srcGmK, copyParamsK, padParams);
         GlobalTensor<uint8_t> srcGmV;
         srcGmV.SetGlobalBuffer(reinterpret_cast<__gm__ uint8_t *>(gvaV));
         AscendC::DataCopyPad(prefetchUbLocal_[tokenSizeBytesK_], srcGmV, copyParamsV, padParams);
+        SetWaitFlag<HardEvent::MTE2_MTE3>(HardEvent::MTE2_MTE3);
         
         // 4. UB→Staging Buffer
         AscendC::DataCopyPad(
         prefetchStagingBufGm_[static_cast<uint64_t>(slot) * static_cast<uint64_t>(kEntryBytes_)],
         prefetchUbLocal_, copyParamsFull);
+        SetWaitFlag<HardEvent::MTE3_MTE2>(HardEvent::MTE3_MTE2);
     }
 }
 

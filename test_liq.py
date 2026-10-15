@@ -87,6 +87,12 @@ def make_prefetch_tensors():
 
 
 # ---------------- Test 2a: prefetch 开启但零触发 ----------------
+query.fill_(1)
+key.zero_()
+key.view(-1, D)[256:320].fill_(1)
+weights.fill_(1)
+query_dequant_scale.fill_(1)
+key_dequant_scale.fill_(1)
 print("=== Test 2a: prefetch 开启, 阈值巨大 (零触发) ===")
 staging, counter, slot_map = make_prefetch_tensors()
 out2a = run_op(token_gva_table=token_gva_table, prefetch_staging_buf=staging,
@@ -94,24 +100,23 @@ out2a = run_op(token_gva_table=token_gva_table, prefetch_staging_buf=staging,
                ema_threshold=1e30, token_size_bytes_k=token_size_bytes_k)
 check_out("[T2a]", out2a)
 print("[T2a] used slots:", int((slot_map != -1).sum().item()), "(应为 0)")
+assert torch.all(slot_map == -1).item()
 print("=== Test 2a PASS ===")
 
 # ---------------- Test 2b: 真实 prefetch ----------------
-# 阈值调参: 随机数据下 score 标准差约 ~6e4, 200000 约 3σ 只触发少量 token。
-# kernel 内 bitPositions 数组上限 256: 单 tile 超阈值 token 数须远小于 256,
-# used=0 则降到 100000, 崩了则升到 1000000
 print("=== Test 2b: 真实 prefetch ===")
 staging, counter, slot_map = make_prefetch_tensors()
 out2b = run_op(token_gva_table=token_gva_table, prefetch_staging_buf=staging,
                prefetch_slot_counter=counter, token_to_prefetch_slot=slot_map,
-               ema_threshold=200000.0, token_size_bytes_k=token_size_bytes_k)
+               ema_threshold=1.0, token_size_bytes_k=token_size_bytes_k)
 check_out("[T2b]", out2b)
 used = int((slot_map[0] != -1).sum().item())
 print("[T2b] used slots:", used)
-if used > 0:
-    tok = (slot_map[0] != -1).nonzero()[0].item()
-    slot = slot_map[0, tok].item()
-    k_ok = torch.equal(staging[slot, :token_size_bytes_k].cpu(), k_pool[tok].cpu())
-    v_ok = torch.equal(staging[slot, token_size_bytes_k:].cpu(), v_pool[tok].cpu())
-    print(f"[T2b] token {tok} -> slot {slot}: K bytes match={k_ok}, V bytes match={v_ok}")
+assert used == 64, used
+hit_tokens = (slot_map[0].cpu() >= 0).nonzero().flatten()
+assert torch.equal(hit_tokens, torch.arange(256, 320))
+hit_slots = slot_map[0].cpu()[hit_tokens].long()
+assert torch.unique(hit_slots).numel() == used
+assert torch.equal(staging.cpu()[hit_slots, :token_size_bytes_k], k_pool.cpu()[hit_tokens])
+assert torch.equal(staging.cpu()[hit_slots, token_size_bytes_k:], v_pool.cpu()[hit_tokens])
 print("=== Test 2b PASS ===")
