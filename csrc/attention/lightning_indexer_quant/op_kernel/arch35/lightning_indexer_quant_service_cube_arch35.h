@@ -362,9 +362,8 @@ __aicore__ inline void LIQMatmul<LIQT>::WeightDmaCopy(uint64_t s1gL1RealSize, co
 {
     DataCopyParams copyInParams;
     copyInParams.blockCount = 1;
-    // weightWorkspace 每 tile 布局为 [s1gL1RealSize][BLOCK_CUBE] (与 AIV ProcessVec0 的
-    // CopyOut 长度 cuProcEleNum*BLOCK_CUBE 对齐), 此处须按元素个数拷 s1gL1RealSize*BLOCK_CUBE
-    copyInParams.blockLen = s1gL1RealSize * BLOCK_CUBE;
+    // DataCopy counts 32-byte blocks; each row contains BLOCK_CUBE (16) half elements.
+    copyInParams.blockLen = s1gL1RealSize;
     copyInParams.srcStride = 0;
     copyInParams.dstStride = 0;
     DataCopy(weightL1_[(qwL1Mte2BufIdx_ % DOUBLE_BUF_NUM) * WEIGHT_BUFFER_OFFSET],
