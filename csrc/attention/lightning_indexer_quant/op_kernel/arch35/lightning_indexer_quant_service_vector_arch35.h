@@ -325,10 +325,14 @@ __aicore__ inline void LIQVector<LIQT>::PrefetchScoresInVec1(
     AscendC::CMPMODE::GT, cmpLenAlign);
 
     // 收集超过阈值的 position
+    constexpr uint32_t MAX_PREFETCH_POSITIONS = 256;
     uint32_t validInRow = 0;
-    uint32_t bitPositions [256];  //s2BaseSize 上限 2048, 但单次 cuS2Len <= 2048
+    uint32_t bitPositions[MAX_PREFETCH_POSITIONS];
     for (uint32_t j = 0; j < cuS2Len; j++) {
         if ((cmpMaskUb_.GetValue(j / 8) >> (j % 8)) & 1) {
+            if (validInRow >= MAX_PREFETCH_POSITIONS) {
+                return;
+            }
             bitPositions[validInRow++] = j;
         }
     }
