@@ -79,9 +79,10 @@ public:
             .FormatList({ge::FORMAT_ND})
             .AutoContiguous();
         // ---- ECHO-style prefetch inputs (OPTIONAL) ----
+        // torch 侧固定用 int64 传 GVA 地址表, 内核按 8 字节地址读取
         this->Input("token_gva_table")
             .ParamType(OPTIONAL)
-            .DataTypeList({ge::DT_UINT64, ge::DT_INT64})
+            .DataTypeList({ge::DT_INT64})
             .FormatList({ge::FORMAT_ND})
             .AutoContiguous();
         this->Input("prefetch_staging_buf")
@@ -202,7 +203,7 @@ public:
         // ---- ECHO-style prefetch inputs (OPTIONAL, A5 950) ----
         aicore_config_95.Input("token_gva_table")
             .ParamType(OPTIONAL)
-            .DataTypeList({ge::DT_UINT64, ge::DT_INT64})
+            .DataTypeList({ge::DT_INT64})
             .FormatList({ge::FORMAT_ND})
             .AutoContiguous();
         aicore_config_95.Input("prefetch_staging_buf")

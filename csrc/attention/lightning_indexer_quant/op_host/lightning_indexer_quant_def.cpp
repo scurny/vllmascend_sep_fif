@@ -62,9 +62,10 @@ public:
             .FormatList({ge::FORMAT_ND})
             .AutoContiguous();
         // ---- ECHO-style prefetch inputs (OPTIONAL) ----
+        // torch 侧无法实用地创建 uint64 张量(A5), manager 固定用 int64, 内核按 8 字节地址读取
         this->Input("token_gva_table")
         .ParamType(OPTIONAL)
-        .DataType({ge::DT_UINT64, ge::DT_INT64})
+        .DataType({ge::DT_INT64})
         .FormatList({ge::FORMAT_ND})
         .AutoContiguous();
         this->Input("prefetch_staging_buf")
@@ -148,7 +149,7 @@ public:
         // ---- ECHO-style prefetch inputs ----
         aicore_config_95.Input("token_gva_table")
         .ParamType(OPTIONAL)
-        .DataType({ge::DT_UINT64,ge::DT_INT64,ge::DT_UINT64,ge::DT_INT64,ge::DT_UINT64})
+        .DataType({ge::DT_INT64,ge::DT_INT64,ge::DT_INT64,ge::DT_INT64,ge::DT_INT64})
         .FormatList({ge::FORMAT_ND})
         .AutoContiguous();
         aicore_config_95.Input("prefetch_staging_buf")
