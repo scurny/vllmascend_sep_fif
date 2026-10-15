@@ -865,7 +865,7 @@ class SparseKVOffloadManager:
 
     def update_token_gva_table(
         self,
-        block_table_cpu: torch.Tensor,
+        block_table: torch.Tensor,
         num_reqs: int,
         layer_id: int,
     ) -> None:
@@ -873,20 +873,18 @@ class SparseKVOffloadManager:
         if not (self.tp_rank == 0 or self.rank_local_host_pool):
             return
         bs = self.block_size
-        max_blocks = block_table_cpu.shape[1]
+        max_blocks = block_table.shape[1]
         max_tokens = min(max_blocks * bs, self.max_model_len)
         dvas_k_base = self.dvas_k_bases[layer_id]
         dvas_v_base = self.dvas_v_bases[layer_id]
-        block_nums = block_table_cpu[:num_reqs].to(torch.int64).unsqueeze(-1)
-        offsets = torch.arange(bs, dtype=torch.int64)
+        block_nums = block_table[:num_reqs].to(torch.int64).unsqueeze(-1)
+        offsets = torch.arange(bs, dtype=torch.int64, device=block_table.device)
         global_positions = (block_nums * bs + offsets).reshape(num_reqs, max_blocks * bs)[:, :max_tokens]
-        self.token_gva_table_cpu[:num_reqs, :max_tokens, 0] = (
-            dvas_k_base + global_positions * self.token_size_bytes_k
-        )
-        self.token_gva_table_cpu[:num_reqs, :max_tokens, 1] = (
-            dvas_v_base + global_positions * self.token_size_bytes_v
-        )
-        self._token_gva_table_dirty = True
+        on_cpu = block_table.device.type == "cpu"
+        token_gva_table = self.token_gva_table_cpu if on_cpu else self.token_gva_table_npu
+        token_gva_table[:num_reqs, :max_tokens, 0] = dvas_k_base + global_positions * self.token_size_bytes_k
+        token_gva_table[:num_reqs, :max_tokens, 1] = dvas_v_base + global_positions * self.token_size_bytes_v
+        self._token_gva_table_dirty = on_cpu
 
     def _sync_token_gva_table_to_npu(self) -> None:
         """Copy token_gva_table from CPU to NPU if dirty."""

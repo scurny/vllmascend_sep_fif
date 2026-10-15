@@ -780,20 +780,32 @@ class TestUpdateTokenGVATableRealImpl(unittest.TestCase):
         # Bypass __init__ entirely; we only need a handful of attributes.
         mgr = SparseKVOffloadManager.__new__(SparseKVOffloadManager)
         mgr.tp_rank = 0
+        mgr.rank_local_host_pool = False
         mgr.block_size = block_size
         mgr.max_model_len = max_model_len
         mgr.topk = 2  # not used by update_token_gva_table, but harmless
         mgr.num_layers = num_layers
-        mgr.gvas_k_bases = {i: 0x10000000 + i * 0x1000000 for i in range(num_layers)}
-        mgr.gvas_v_bases = {i: 0x20000000 + i * 0x1000000 for i in range(num_layers)}
+        mgr.dvas_k_bases = {i: 0x10000000 + i * 0x1000000 for i in range(num_layers)}
+        mgr.dvas_v_bases = {i: 0x20000000 + i * 0x1000000 for i in range(num_layers)}
         mgr.token_size_bytes_k = token_size_k
         mgr.token_size_bytes_v = token_size_v
         max_blocks = (max_model_len + block_size - 1) // block_size
         mgr.token_gva_table_cpu = torch.zeros(
-            [max_num_reqs, max_model_len, 2], dtype=torch.uint64, device="cpu"
+            [max_num_reqs, max_blocks * block_size, 2], dtype=torch.int64, device="cpu"
         )
         mgr._token_gva_table_dirty = False
         return mgr
+
+    def test_device_table_keeps_address_math_on_device(self):
+        mgr = self._make_minimal_manager()
+        mgr.token_gva_table_cpu.fill_(77)
+        mgr.token_gva_table_npu = torch.empty_like(mgr.token_gva_table_cpu, device="meta")
+        block_table = torch.empty((1, 4), dtype=torch.int32, device="meta")
+
+        mgr.update_token_gva_table(block_table, num_reqs=1, layer_id=0)
+
+        self.assertTrue(torch.all(mgr.token_gva_table_cpu == 77))
+        self.assertFalse(mgr._token_gva_table_dirty)
 
     def test_single_request_matches_formula(self):
         mgr = self._make_minimal_manager()
@@ -801,8 +813,8 @@ class TestUpdateTokenGVATableRealImpl(unittest.TestCase):
         block_table_cpu = torch.tensor([[1, 4, 2, 0]], dtype=torch.int32)
         mgr.update_token_gva_table(block_table_cpu, num_reqs=1, layer_id=0)
         # Same expected values as your existing test, but now driven by REAL code.
-        k_base = mgr.gvas_k_bases[0]
-        v_base = mgr.gvas_v_bases[0]
+        k_base = mgr.dvas_k_bases[0]
+        v_base = mgr.dvas_v_bases[0]
         k_sz = mgr.token_size_bytes_k
         v_sz = mgr.token_size_bytes_v
         # token pos 0 → block 1 → global_pos 128
@@ -822,7 +834,7 @@ class TestUpdateTokenGVATableRealImpl(unittest.TestCase):
         mgr = self._make_minimal_manager(max_model_len=256, max_num_reqs=2)
         block_table_cpu = torch.tensor([[0, 1], [10, 11]], dtype=torch.int32)
         mgr.update_token_gva_table(block_table_cpu, num_reqs=2, layer_id=0)
-        k_base = mgr.gvas_k_bases[0]
+        k_base = mgr.dvas_k_bases[0]
         k_sz = mgr.token_size_bytes_k
 
         # req0 pos0 → block 0 → GVA = base + 0
@@ -1143,20 +1155,18 @@ class TestStartPrefetchIntegration(unittest.TestCase):
     ):
         mgr = SparseKVOffloadManager.__new__(SparseKVOffloadManager)
         mgr.tp_rank = 0
+        mgr.rank_local_host_pool = False
         mgr.num_layers = num_layers
         mgr.block_size = block_size
         mgr.max_model_len = max_model_len
         mgr.max_num_reqs = max_num_reqs
-        mgr.gvas_k_bases = [0x10000000 + i * 0x1000000 for i in range(num_layers)]
-        mgr.gvas_v_bases = [0x20000000 + i * 0x1000000 for i in range(num_layers)]
+        mgr.dvas_k_bases = [0x10000000 + i * 0x1000000 for i in range(num_layers)]
+        mgr.dvas_v_bases = [0x20000000 + i * 0x1000000 for i in range(num_layers)]
         mgr.token_size_bytes_k = k_dim * 2
         mgr.token_size_bytes_v = v_dim * 2
         max_blocks = (max_model_len + block_size - 1) // block_size
         max_tokens = max_blocks * block_size
         dev = "npu:0"
-        # Use int64 instead of uint64: NPU does not support DT_UINT64.
-        # The source uses uint64 but A5 hardware can't create it; for the
-        # purpose of this integration test the values fit in int64 just fine.
         mgr.token_gva_table_cpu = torch.zeros(
             [max_num_reqs, max_tokens, 2], dtype=torch.int64, device="cpu"
         )
@@ -1169,6 +1179,25 @@ class TestStartPrefetchIntegration(unittest.TestCase):
             [max_num_reqs, max_tokens], -1, dtype=torch.int32, device=dev
         )
         return mgr
+
+    def test_npu_block_table_updates_device_gvas_for_each_layer(self):
+        mgr = self._make_minimal_manager(num_layers=2)
+        mgr.token_gva_table_cpu.fill_(77)
+        block_table = torch.tensor([[1, 4], [10, 11]], dtype=torch.int32, device="npu:0")
+        positions = (
+            block_table.cpu().long().unsqueeze(-1) * mgr.block_size + torch.arange(mgr.block_size)
+        ).reshape(2, -1)
+
+        for layer_id in range(2):
+            mgr.start_prefetch(block_table, num_tokens=2, num_reqs=2, layer_id=layer_id)
+
+            actual = mgr.token_gva_table_npu.cpu()
+            expected_k = mgr.dvas_k_bases[layer_id] + positions * mgr.token_size_bytes_k
+            expected_v = mgr.dvas_v_bases[layer_id] + positions * mgr.token_size_bytes_v
+            self.assertTrue(torch.equal(actual[:, :, 0], expected_k))
+            self.assertTrue(torch.equal(actual[:, :, 1], expected_v))
+            self.assertTrue(torch.all(mgr.token_gva_table_cpu == 77))
+            self.assertFalse(mgr._token_gva_table_dirty)
 
     def test_start_prefetch_chains_all_three_steps(self):
         """After start_prefetch, all three side effects must be present:
@@ -1194,7 +1223,7 @@ class TestStartPrefetchIntegration(unittest.TestCase):
         # 2) slot table all -1
         self.assertTrue(torch.all(mgr.token_to_prefetch_slot.cpu() == -1))
         # 3) token_gva_table_cpu populated with expected GVA
-        k_base = mgr.gvas_k_bases[0]
+        k_base = mgr.dvas_k_bases[0]
         k_sz = mgr.token_size_bytes_k
         # pos 0 → block 1 → global_pos 128
         self.assertEqual(
