@@ -158,7 +158,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> QuantLightningIndexerCandidate(
     int64_t keyScaleStride0 = keyDequantScale.stride(0);
     // v2 算子 def 未声明 token_size_bytes_k attr, 由 tiling 按 staging buf 形状推导, 此处仅接收不入参
     (void)tokenSizeBytesK;
-    float emaThresholdVal = static_cast<float>(emaThreshold);
+    double emaThresholdVal = emaThreshold;  // def .Float() attr 生成签名收 double, 不能降成 float
 
     fprintf(stderr,
             "[QLI_V2_ADPT] before EXEC_NPU_CMD: topk=%ld quantMode=%ld layout=%s/%s ema=%f "

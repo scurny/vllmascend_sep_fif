@@ -66,7 +66,9 @@ at::Tensor npu_lightning_indexer_quant(
     char *key_layout_ptr = const_cast<char *>(key_layout_str.c_str());
 
     //---- ECHO-style prefetch: 局部变量，避免 rvalue 绑定非 const 引用 ----
-    float ema_threshold_val = static_cast<float>(ema_threshold);
+    // NOTE: def 里 .Float() 声明的 attr, aclnn 生成签名按仓库惯例收 double;
+    // 传 float 会因寄存器位宽被按 double 读成 subnormal -> 0.0, 故必须保持 double。
+    double ema_threshold_val = ema_threshold;
     int64_t token_size_bytes_k_val = token_size_bytes_k;
     // NOTE: EXEC_NPU_CMD 按位置直接调用生成的 aclnnLightningIndexerQuantGetWorkspaceSize,
     // 参数顺序必须与 op_host/lightning_indexer_quant_def.cpp 中的声明顺序完全一致:

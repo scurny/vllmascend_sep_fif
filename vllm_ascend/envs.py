@@ -49,6 +49,11 @@ env_variables: dict[str, Callable[[], Any]] = {
     # scenarios in an environment without an NPU. Do not set it to False in
     # other scenarios.
     "COMPILE_CUSTOM_KERNELS": lambda: bool(int(os.getenv("COMPILE_CUSTOM_KERNELS", "1"))),
+    # Whether to skip rebuilding the aclnn custom-ops package (build_aclnn.sh)
+    # during `pip install`. Only the torch extension vllm_ascend_C is rebuilt.
+    # Useful for single-op debugging when the custom-ops package is built and
+    # installed manually via csrc/build.sh. Default: 0 (build custom ops).
+    "VLLM_ASCEND_SKIP_ACLNN_BUILD": lambda: bool(int(os.getenv("VLLM_ASCEND_SKIP_ACLNN_BUILD", "0"))),
     # The CXX compiler used for compiling the package. If not set, the default
     # value is None, which means the system default CXX compiler will be used.
     "CXX_COMPILER": lambda: os.getenv("CXX_COMPILER", None),

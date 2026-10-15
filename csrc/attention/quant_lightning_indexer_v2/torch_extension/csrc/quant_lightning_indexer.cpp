@@ -196,7 +196,7 @@ std::tuple<at::Tensor, at::Tensor> QuantLightningIndexer(
     // def 新增 candidate_topk_index / 4 个 prefetch 可选输入与 ema_threshold attr, 按空输入传入
     const c10::optional<at::Tensor> noCandidateTensor;
     const c10::optional<at::Tensor> noPrefetchTensor;
-    float emaThresholdVal = 0.0f;
+    double emaThresholdVal = 0.0;
     ACLNN_CMD(aclnnQuantLightningIndexerV2, queryWrapper, keyWrapper, weights, queryScaleWrapper, keyScaleWrapper,
               cuSeqlensQ, cuSeqlensK, sequsedQ, sequsedK, cmpResidualK, blockTable, outputIdxOffset, metadata,
               noCandidateTensor, noPrefetchTensor, noPrefetchTensor, noPrefetchTensor, noPrefetchTensor, topk,
@@ -262,7 +262,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> QuantLightningIndexerCandidate(
 
     // v2 def 新增 4 个 prefetch 可选输入与 ema_threshold attr, 此扩展入口未暴露, 按空输入传入
     const c10::optional<at::Tensor> noPrefetchTensor;
-    float emaThresholdVal = 0.0f;
+    double emaThresholdVal = 0.0;
     ACLNN_CMD(aclnnQuantLightningIndexerV2, queryWrapper, keyWrapper, weights, queryScaleWrapper, keyScaleWrapper,
               cuSeqlensQ, cuSeqlensK, sequsedQ, sequsedK, cmpResidualK, blockTable, outputIdxOffset,
               metadata, candidateTopkIndexIn, noPrefetchTensor, noPrefetchTensor, noPrefetchTensor, noPrefetchTensor,
