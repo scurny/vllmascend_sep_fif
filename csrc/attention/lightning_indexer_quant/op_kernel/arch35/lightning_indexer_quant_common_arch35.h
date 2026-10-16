@@ -79,6 +79,12 @@ struct RunInfo {
 struct ConstInfo {
     // CUBE与VEC核间同步的模式
     static constexpr uint32_t FIA_SYNC_MODE2 = 2;
+    // 950融合核UB直通路径的核间同步 (AIC fixpipe直写配对AIV的UB, ping-pong按chunk轮转)
+    static constexpr uint32_t FIA_SYNC_MODE4 = 4;
+    // AIV->AIC "slot已消费" 事件基址: id = BASE + slot*2 + aiv (aiv = blockIdx%2)
+    static constexpr uint32_t SYNC_VC_EVENT_BASE = 4U;
+    // AIC->AIV "slot已生产" 事件基址: id = BASE + slot*2 + aiv
+    static constexpr uint32_t SYNC_CV_EVENT_BASE = 8U;
     // BUFFER的字节数
     static constexpr uint32_t BUFFER_SIZE_BYTE_32B = 32;
     static constexpr uint32_t BUFFER_SIZE_BYTE_64B = 64;

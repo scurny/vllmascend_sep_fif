@@ -241,8 +241,8 @@ if _stage:
             print(f"[LIQ_DEBUG] 输出读取失败(设备异常态): {str(e2)[:120]}")
     sys.exit(0)
 
-# ---------------- mm1Res 落盘诊断: ema=-20, Vec1 把 mm1Res 原始位型写入输出 ----------------
-# 实测 CopyOut(DataCopyPad) 落址 +16 元素: out[0]=marker, out[1..15]=哨兵, out[16+i]=mm1Res[i]
+# ---------------- C_ws 落盘诊断: ema=-20, AIV0 把归约出的 C_ws 原始位型写入输出 ----------------
+# 950 UB直通: dump 内容 = AIV0 token0 的 qkAcc_ (乘kScale前的C_ws), CopyOut为裸DataCopy, 落址无偏移
 # 运行形状: LIQ_TOPK=2048 LIQ_ASL=2048 LIQ_BLOCKNUM=16 (单核, 输出 2048 单元装下全量)
 if os.environ.get("LIQ_DUMP"):
     build_inputs(0)
@@ -260,27 +260,36 @@ if os.environ.get("LIQ_DUMP"):
     dot = dot.to(torch.float16).float().clamp(min=0)
     w = (weights.cpu() * query_dequant_scale.cpu()).float()
     cws = torch.einsum('tg,tgs->ts', w, dot)[0]
-    SHIFT = 16
-    mm1 = floats[SHIFT:]
-    print(f"=== LIQ_DUMP: 输出 {raw.numel()} 单元; out[0]={raw[0].item() & 0xFFFFFFFF:#x}(marker), "
-          f"哨兵[1..{SHIFT})={int((raw[1:SHIFT] == 0x7E7E7E7E).sum())}/{SHIFT - 1}; "
-          f"mm1Res 可见 {mm1.numel()}/{asl_k}")
-    # 斜坡探针: 64 个值 1000..1063 写到 offset 512, 看实际落点 (判 +16 落址)
+    mm1 = floats[:asl_k]
+    _m0 = raw[0].item() & 0xFFFFFFFF
+    _hdr = "dump未执行(仅入口marker!)" if _m0 == 0xC1A00000 else "C_ws"
+    print(f"=== LIQ_DUMP: 输出 {raw.numel()} 单元; out[0]={_m0:#x}; {_hdr} 可见 {mm1.numel()}/{asl_k}")
+    # 斜坡探针: 64 个值 1000..1063 写到 offset 512, 看实际落点
     probe_pos = [i for i, v in enumerate(raw.tolist()) if 1000 <= (v & 0xFFFFFFFF) < 1064]
     if probe_pos:
         print(f"[PROBE] 斜坡 1000..1063 落在 [{probe_pos[0]}..{probe_pos[-1]}] "
-              f"(期望 [512..575] 正常 / [528..591] +16) 首值={raw[probe_pos[0]].item()}")
+              f"(期望 [512..575]) 首值={raw[probe_pos[0]].item()}")
     else:
         print("[PROBE] 未找到斜坡值!")
+    # 探针覆盖 [512..575], 从统计与比对中剔除
+    _n = min(asl_k, mm1.numel())
+    keep = torch.ones(_n, dtype=torch.bool)
+    keep[512:min(576, _n)] = False
+    diff = (mm1[:_n][keep] - cws[:_n][keep]).abs()
+    tol = torch.clamp(cws[:_n][keep].abs(), min=1.0) * 0.01
+    print(f"[DUMP] 与金标C_ws比对: {int((diff <= tol).sum())}/{int(keep.sum())} 在1%容差内, "
+          f"最大偏差 {float(diff.max()):.4f}")
     tile = 128
-    for t in range(asl_k // tile):
-        seg = mm1[t * tile:(t + 1) * tile]
+    for t in range(_n // tile):
+        lo, hi = t * tile, (t + 1) * tile
+        m = keep[lo:hi]
+        seg = mm1[lo:hi][m]
         if seg.numel() == 0:
             break
         n_nan = int(torch.isnan(seg).sum())
         n_zero = int((seg == 0).sum())
         other = seg[~torch.isnan(seg) & (seg != 0)]
-        ref = cws[t * tile:(t + 1) * tile]
+        ref = cws[lo:hi][m]
         print(f"[DUMP] tile {t:2d}: nan={n_nan:3d} zero={n_zero:3d} other={int(other.numel()):3d} "
               f"other前8={[round(x, 1) for x in other[:8].tolist()]} "
               f"金标前8={[round(x, 1) for x in ref[:8].tolist()]}")

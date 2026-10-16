@@ -42,12 +42,14 @@ constexpr int64_t MRG_BLOCK_4 = 4;
 template <typename T>
 __aicore__ inline void CopyOut(const GlobalTensor<T> &dstGm, const LocalTensor<T> &srcUb, int64_t copyCount)
 {
+    // 950: DataCopyPad 单块 blockLen > 4KB 时落址偏移 +64B (实测), 改用裸 DataCopy
+    // (调用侧长度均为32B整数倍: sparseCount*4 / BASE_TOPK_VALUE_IDX_SIZE*4 / paramNum*8)
     AscendC::DataCopyParams dataCopyOutyParams;
     dataCopyOutyParams.blockCount = 1;
     dataCopyOutyParams.blockLen = copyCount * sizeof(T);
     dataCopyOutyParams.srcStride = 0;
     dataCopyOutyParams.dstStride = 0;
-    AscendC::DataCopyPad(dstGm, srcUb, dataCopyOutyParams);
+    AscendC::DataCopy(dstGm, srcUb, dataCopyOutyParams);
 }
 
 /**

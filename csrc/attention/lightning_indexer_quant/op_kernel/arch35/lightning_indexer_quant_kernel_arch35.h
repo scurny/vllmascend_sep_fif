@@ -72,15 +72,10 @@ public:
     static constexpr LI_LAYOUT Q_LAYOUT_T = LIQT::layout;
     static constexpr LI_LAYOUT K_LAYOUT_T = LIQT::keyLayout;
 
-    using MM1_OUT_T = float;
-
     LIQMatmul<LIQT> matmulService;
     LIQVector<LIQT> vectorService;
 
     // =================================常量区=================================
-    static constexpr uint32_t SYNC_C1_V1_FLAG = 4;
-    static constexpr uint32_t SYNC_V1_C1_FLAG = 5;
-
     static constexpr uint32_t M_BASE_SIZE = 256;
     static constexpr uint32_t S2_BASE_SIZE = 2048;
     static constexpr uint32_t HEAD_DIM = 128;
@@ -409,16 +404,9 @@ __aicore__ inline void LIQPreload<LIQT>::Init(__gm__ uint8_t *query, __gm__ uint
     }
 
     pipe = tPipe;
-    // workspace 内存排布
-    // |mm1ResGm(存S)|vec1ResGm(存LD中间结果)|vec1ParamGm(存LD参数)
-    // |Core0_mm1ResDB0-Core0_mm1ResDB1-Core1_mm1ResDB0....Core23_mm1ResDB0-Core23_mm1ResDB1|Core0_vec1Res...
+    // workspace 内存排布 (950 UB直通改造后, cube结果不再经GM中转, mm1Res/weightWs区域已废弃)
+    // |vec1ResGm(存LD中间结果)|vec1ParamGm(存LD参数)
     uint64_t offset = 0;
-
-    // mm1开DoubleBuffer
-    GlobalTensor<MM1_OUT_T> mm1ResGm;  // 存放S
-    uint64_t singleCoreMm1ResSize = WS_DOBULE * constInfo.s1BaseSize * constInfo.s2BaseSize * sizeof(MM1_OUT_T);
-    mm1ResGm.SetGlobalBuffer((__gm__ MM1_OUT_T *)(workspace + aiCoreIdx * singleCoreMm1ResSize));
-    offset += GetBlockNum() * singleCoreMm1ResSize;
 
     // ld流程需要ws大小: [aicnum, 2, CeilDiv(constInfo.mBaseSize, constInfo.gSize), topkOut_*2]
     // (aic, 8, 2, 2, 2048)
@@ -431,12 +419,6 @@ __aicore__ inline void LIQPreload<LIQT>::Init(__gm__ uint8_t *query, __gm__ uint
     // (aic, s1_cube, 头尾，16ele)
     GlobalTensor<int64_t> vec1ParamGm;  // 存放LD参数信息
     vec1ParamGm.SetGlobalBuffer((__gm__ int64_t *)(workspace + offset));
-    offset += GetBlockNum() * constInfo.s1BaseSize * WS_DOBULE * LD_PARAM_NUM * sizeof(int64_t);
-
-    GlobalTensor<half> weightWorkspaceGm;  // v1阶段处理w*scale后的结果
-    uint64_t weightMemSize = BLOCK_CUBE * constInfo.mBaseSize * WS_DOBULE * sizeof(half);
-    weightWorkspaceGm.SetGlobalBuffer((__gm__ half *)(workspace + offset + aiCoreIdx * weightMemSize));
-    offset += GetBlockNum() * weightMemSize;
 
     GlobalTensor<half> qScaleGm;
     GlobalTensor<half> kScaleGm;
@@ -448,7 +430,7 @@ __aicore__ inline void LIQPreload<LIQT>::Init(__gm__ uint8_t *query, __gm__ uint
         kScaleGm.SetGlobalBuffer((__gm__ half *)keyScale);
         blockTableGm.SetGlobalBuffer((__gm__ int32_t *)blockTable);
         vectorService.InitVecInputTensor(weightsGm, qScaleGm, kScaleGm, indiceOutGm, blockTableGm);
-        vectorService.InitVecWorkspaceTensor(weightWorkspaceGm, mm1ResGm, vec1ResGm, vec1ParamGm);
+        vectorService.InitVecWorkspaceTensor(vec1ResGm, vec1ParamGm);
         //---- ECHO-style prefetch: 初始化 prefetch tensor ----
         if (tokenGvaTable != nullptr && prefetchStagingBuf != nullptr &&
             prefetchSlotCounter != nullptr && tokenToPrefetchSlot != nullptr) {
@@ -470,7 +452,7 @@ __aicore__ inline void LIQPreload<LIQT>::Init(__gm__ uint8_t *query, __gm__ uint
             blockTableGm.SetGlobalBuffer((__gm__ int32_t *)blockTable);
         }
         keyGm.SetGlobalBuffer((__gm__ K_T *)key);
-        matmulService.InitMm1GlobalTensor(blockTableGm, keyGm, queryGm, mm1ResGm, weightWorkspaceGm);
+        matmulService.InitMm1GlobalTensor(blockTableGm, keyGm, queryGm);
     }
     if (constInfo.emaThreshold == LIQCommon::LIQ_DEBUG_INIT_BUFBOUND) {
         return;  // LIQ 调试里程碑门: 全部 buffer 绑定完成, InitBuffers 前
@@ -652,12 +634,15 @@ __aicore__ inline void LIQPreload<LIQT>::ProcessMain()
 
     if ASCEND_IS_AIV {
         vectorService.AllocEventID();
-        CrossCoreSetFlag<LIQCommon::ConstInfo::FIA_SYNC_MODE2, PIPE_MTE2>(constInfo.syncV1C1);
-        CrossCoreSetFlag<LIQCommon::ConstInfo::FIA_SYNC_MODE2, PIPE_MTE2>(constInfo.syncV1C1);
+        // 950 UB直通: 预置本核2个slot的VC事件(表示slot空闲), AIC首个chunk的fixpipe无需等待;
+        // 后续每chunk在ConsumeQkChunks内与AIC的ProcessQk做CV/VC交替握手
+        uint32_t aivIdx = tmpBlockIdx % 2;
+        CrossCoreSetFlag<LIQCommon::ConstInfo::FIA_SYNC_MODE4, PIPE_V>(
+            LIQCommon::ConstInfo::SYNC_VC_EVENT_BASE + aivIdx);      // slot 0
+        CrossCoreSetFlag<LIQCommon::ConstInfo::FIA_SYNC_MODE4, PIPE_V>(
+            LIQCommon::ConstInfo::SYNC_VC_EVENT_BASE + 2 + aivIdx);  // slot 1
     } else {
-        matmulService.AllocEventID();
-        CrossCoreSetFlag<LIQCommon::ConstInfo::FIA_SYNC_MODE2, PIPE_FIX>(constInfo.syncC1V0);
-        CrossCoreSetFlag<LIQCommon::ConstInfo::FIA_SYNC_MODE2, PIPE_FIX>(constInfo.syncC1V0);
+        matmulService.AllocEventID();  // 含SetMMLayoutTransform(true): fixpipe直写UB必需
     }
 
     // 必须零初始化: ProcessBaseBlock 首次迭代会读 lastRunInfo(另一个 slot)的 isValid,
@@ -673,10 +658,7 @@ __aicore__ inline void LIQPreload<LIQT>::ProcessMain()
 
             if ASCEND_IS_AIV {
                 if (bN2LoopIdx == splitCoreInfo.bN2End && gloop > 0) {
-                    CrossCoreWaitFlag(constInfo.syncC1V1);
                     vectorService.ProcessVec1(runInfo[1 - gloop % LI_QUANT_PRELOAD_TASK_CACHE_SIZE]);
-                    CrossCoreSetFlag<LIQCommon::ConstInfo::FIA_SYNC_MODE2, PIPE_MTE3>(
-                        constInfo.syncV1C1);  // 反向同步 1
                 }
             }
             continue;
@@ -700,12 +682,8 @@ __aicore__ inline void LIQPreload<LIQT>::ProcessMain()
 
     if ASCEND_IS_AIV {
         vectorService.FreeEventID();
-        CrossCoreWaitFlag(constInfo.syncC1V0);
-        CrossCoreWaitFlag(constInfo.syncC1V0);
     } else {
-        matmulService.FreeEventID();
-        CrossCoreWaitFlag(constInfo.syncV1C1);
-        CrossCoreWaitFlag(constInfo.syncV1C1);
+        matmulService.FreeEventID();  // 含排空4个VC事件 + SetMMLayoutTransform(false)
     }
 }
 
@@ -721,29 +699,14 @@ __aicore__ inline void LIQPreload<LIQT>::ProcessBaseBlock(uint32_t loop, uint64_
 
     if (curRunInfo.isValid) {
         if ASCEND_IS_AIC {
-            if (curRunInfo.isFirstS2InnerLoop) {
-                CrossCoreWaitFlag(constInfo.syncV0C1);
-            }
-            CrossCoreWaitFlag(constInfo.syncV1C1);  // 反向同步 1
+            // Qk结果经fixpipe直写配对AIV的UB, 每chunk的核间握手在ProcessQk/ConsumeQkChunks内完成
             matmulService.ComputeMm1(curRunInfo);
-            CrossCoreSetFlag<LIQCommon::ConstInfo::FIA_SYNC_MODE2, PIPE_FIX>(constInfo.syncC1V1);
-            if (curRunInfo.isLastS2InnerLoop) {
-                CrossCoreSetFlag<LIQCommon::ConstInfo::FIA_SYNC_MODE2, PIPE_FIX>(constInfo.syncC1V0);  // 反向同步 0
-            }
-        } else {
-            if (curRunInfo.isFirstS2InnerLoop) {
-                CrossCoreWaitFlag(constInfo.syncC1V0);  // 反向同步 0
-                vectorService.ProcessVec0(curRunInfo);
-                CrossCoreSetFlag<LIQCommon::ConstInfo::FIA_SYNC_MODE2, PIPE_MTE3>(constInfo.syncV0C1);
-            }
         }
     }
 
     if (lastRunInfo.isValid) {
         if ASCEND_IS_AIV {
-            CrossCoreWaitFlag(constInfo.syncC1V1);
             vectorService.ProcessVec1(lastRunInfo);
-            CrossCoreSetFlag<LIQCommon::ConstInfo::FIA_SYNC_MODE2, PIPE_MTE3>(constInfo.syncV1C1);  // 反向同步 1
         }
         lastRunInfo.isValid = false;
     }
