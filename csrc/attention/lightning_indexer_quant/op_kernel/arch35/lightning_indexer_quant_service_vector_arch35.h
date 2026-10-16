@@ -525,6 +525,15 @@ __aicore__ inline void LIQVector<LIQT>::ProcessVec1(const LIQCommon::RunInfo &in
                 dumpUb = outQueue_.DeQue<int32_t>();
                 LIQServiceVec::CopyOut(indiceOutGm[info.indiceOutOffset], dumpUb, cuS2LenVecAlign);
                 outQueue_.FreeTensor(dumpUb);
+                // +64B 落址探针: 64 个斜坡值(1000..1063)经 DataCopyPad 写到 offset 512,
+                // host 侧核对实际落点: 出现在 [512..575) 说明落址正确, [528..591) 说明 +16 元素
+                LocalTensor<int32_t> probeUb = outQueue_.AllocTensor<int32_t>();
+                ArithProgression<int32_t>(probeUb, 1000, 1, 64);
+                PipeBarrier<PIPE_V>();
+                outQueue_.EnQue<int32_t>(probeUb);
+                probeUb = outQueue_.DeQue<int32_t>();
+                LIQServiceVec::CopyOut(indiceOutGm[info.indiceOutOffset + 512], probeUb, 64);
+                outQueue_.FreeTensor(probeUb);
                 return;
             }
             AscendC::Cast(kScaleUb, kScaleTUb, RoundMode::CAST_NONE, cuS2Len);

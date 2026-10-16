@@ -242,8 +242,8 @@ if _stage:
     sys.exit(0)
 
 # ---------------- mm1Res 落盘诊断: ema=-20, Vec1 把 mm1Res 原始位型写入输出 ----------------
-# 判读: 每个输出单元是 mm1Res 原始 float 位型; 按 128-token tile 与金标准 C_ws 比对
-# (直方图实测: 偶数 tile(>=2) 的 token 从未被选中 -> 疑似 mm1Res 相应区段未被 cube 落盘)
+# 实测 CopyOut(DataCopyPad) 落址 +16 元素: out[0]=marker, out[1..15]=哨兵, out[16+i]=mm1Res[i]
+# 运行形状: LIQ_TOPK=2048 LIQ_ASL=2048 LIQ_BLOCKNUM=16 (单核, 输出 2048 单元装下全量)
 if os.environ.get("LIQ_DUMP"):
     build_inputs(0)
     out = run_op(ema_threshold=-20.0)
@@ -260,22 +260,30 @@ if os.environ.get("LIQ_DUMP"):
     dot = dot.to(torch.float16).float().clamp(min=0)
     w = (weights.cpu() * query_dequant_scale.cpu()).float()
     cws = torch.einsum('tg,tgs->ts', w, dot)[0]
+    SHIFT = 16
+    mm1 = floats[SHIFT:]
+    print(f"=== LIQ_DUMP: 输出 {raw.numel()} 单元; out[0]={raw[0].item() & 0xFFFFFFFF:#x}(marker), "
+          f"哨兵[1..{SHIFT})={int((raw[1:SHIFT] == 0x7E7E7E7E).sum())}/{SHIFT - 1}; "
+          f"mm1Res 可见 {mm1.numel()}/{asl_k}")
+    # 斜坡探针: 64 个值 1000..1063 写到 offset 512, 看实际落点 (判 +16 落址)
+    probe_pos = [i for i, v in enumerate(raw.tolist()) if 1000 <= (v & 0xFFFFFFFF) < 1064]
+    if probe_pos:
+        print(f"[PROBE] 斜坡 1000..1063 落在 [{probe_pos[0]}..{probe_pos[-1]}] "
+              f"(期望 [512..575] 正常 / [528..591] +16) 首值={raw[probe_pos[0]].item()}")
+    else:
+        print("[PROBE] 未找到斜坡值!")
     tile = 128
-    ntile = asl_k // tile
-    n_sent = int((raw == 0x7E7E7E7E).sum())
-    print(f"=== LIQ_DUMP: 共 {raw.numel()} 单元, 哨兵(未写入) {n_sent}, "
-          f"前8位型: {[hex(x & 0xFFFFFFFF) for x in raw[:8].tolist()]}")
-    for t in range(ntile):
-        seg_i = raw[t * tile:(t + 1) * tile]
-        seg = floats[t * tile:(t + 1) * tile]
+    for t in range(asl_k // tile):
+        seg = mm1[t * tile:(t + 1) * tile]
+        if seg.numel() == 0:
+            break
+        n_nan = int(torch.isnan(seg).sum())
+        n_zero = int((seg == 0).sum())
+        other = seg[~torch.isnan(seg) & (seg != 0)]
         ref = cws[t * tile:(t + 1) * tile]
-        if int((seg_i == 0x7E7E7E7E).sum()) == tile:
-            verdict = "未写入(哨兵)"
-        else:
-            diff = float((seg - ref).abs().max())
-            verdict = "OK" if diff <= 0.05 * float(ref.abs().max()) + 2.0 else "BAD"
-        print(f"[DUMP] tile {t:2d} [{t*tile:5d},{(t+1)*tile:5d}): {verdict:12s} "
-              f"kernel前4={seg[:4].tolist()} 金标前4={[round(x,1) for x in ref[:4].tolist()]}")
+        print(f"[DUMP] tile {t:2d}: nan={n_nan:3d} zero={n_zero:3d} other={int(other.numel()):3d} "
+              f"other前8={[round(x, 1) for x in other[:8].tolist()]} "
+              f"金标前8={[round(x, 1) for x in ref[:8].tolist()]}")
     sys.exit(0)
 
 
