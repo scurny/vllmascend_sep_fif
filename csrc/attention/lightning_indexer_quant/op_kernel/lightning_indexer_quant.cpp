@@ -22,24 +22,18 @@ using namespace LIQKernel;
 
 #define INVOKE_LI_NO_KFC_OP_IMPL(templateClass, ...)                                                         \
     do {                                                                                                     \
-        if (prefetchStagingBuf == nullptr) {                                                                 \
-            return;  /* TODO(debug): 参数门, 不读tiling — 诊断完删除! */                                      \
-        }                                                                                                    \
         templateClass<LIQType<__VA_ARGS__>> op;                                                              \
         GET_TILING_DATA_WITH_STRUCT(LIQTilingData, tiling_data_in, tiling);                                  \
         const LIQTilingData *__restrict tiling_data = &tiling_data_in;                                       \
+        /* LIQ 调试标记: 把 kernel 读到的 emaThreshold 位型写到 out[0].                                     \
+           NOTE: 在 op.Init() 之前禁止 return! MIX_AIC_1_2 下 AIC 主核提前退出会导致             \
+           AIV 从核等待协议信号挂死 (aicore 异常). 合法的提前退出位置是 Process() 开头. */          \
         union {                                                                                              \
             float f;                                                                                         \
             int32_t i;                                                                                       \
         } liqDbgEma;                                                                                         \
         liqDbgEma.f = tiling_data->emaThreshold;                                                             \
         *(reinterpret_cast<__gm__ int32_t *>(sparseIndices)) = liqDbgEma.i;                                  \
-        if (tiling_data->emaThreshold == LIQCommon::LIQ_DEBUG_STAGE_ENTRY_ONLY) {                            \
-            return;                                                                                          \
-        }                                                                                                    \
-        if (tiling_data->sparseMode == 0x5AA5A55AU) {                                                        \
-            return;  /* LIQ 调试兜底门: 老字段魔数, emaThreshold 传递异常时仍可提前返回 */                   \
-        }                                                                                                    \
         op.Init(query, key, weights, queryScale, keyScale, actualSeqLengthsQ, actualSeqLengthsK, blocktable, \
                 sparseIndices, user, tiling_data, &tPipe,                                                    \
                 tokenGvaTable, prefetchStagingBuf, prefetchSlotCounter, tokenToPrefetchSlot);                \

@@ -589,8 +589,10 @@ __aicore__ inline void LIQPreload<LIQT>::CalcRunInfo(uint32_t loop, uint32_t s2L
 template <typename LIQT>
 __aicore__ inline void LIQPreload<LIQT>::Process()
 {
-    if (constInfo.emaThreshold == LIQCommon::LIQ_DEBUG_STAGE_AFTER_INIT) {
-        return;  // 调试阶段开关: 验证 Init (含 InitBuffers/SplitCore) 是否安全
+    if (constInfo.emaThreshold == LIQCommon::LIQ_DEBUG_STAGE_AFTER_INIT ||
+        constInfo.emaThreshold == LIQCommon::LIQ_DEBUG_STAGE_ENTRY_ONLY) {
+        return;  // 调试阶段开关: Init 之后合法提前退出; STAGE 1(-1) 等价于 STAGE 2(-2).
+                  // NOTE: Init 之前 return 会让 AIV 从核等协议挂死, 详见 lightning_indexer_quant.cpp 注释
     }
     if (usedCoreNum == 0) {
         // 没有计算任务，直接清理输出
