@@ -60,6 +60,10 @@ at::Tensor npu_lightning_indexer_quant(
         output_size = {query.size(DIM_0), keyHeadNum, sparse_count};
     }
     at::Tensor lightning_indexer_quant_output = at::empty(output_size, query.options().dtype(at::kInt));
+    if (ema_threshold < 0.0) {
+        // 调试阶段模式(LIQ_STAGE): 预填哨兵值, 用于判读 kernel 是否真的执行了入口调试写入
+        lightning_indexer_quant_output.fill_(0x7E7E7E7E);
+    }
 
     // convert str
     char *query_layout_ptr = const_cast<char *>(query_layout_str.c_str());

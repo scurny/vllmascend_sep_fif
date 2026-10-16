@@ -54,9 +54,27 @@ _stage = os.environ.get("LIQ_STAGE")
 if _stage:
     _s = float(_stage)
     print(f"=== STAGE {_s:g}: kernel gate ema_threshold={-_s:g} ===")
-    _out = run_op(ema_threshold=-_s)
-    torch.npu.synchronize()
-    print(f"=== STAGE {_s:g} OK (无 aicore 错误) ===")
+    _out = None
+    try:
+        _out = run_op(ema_threshold=-_s)
+        torch.npu.synchronize()
+        print(f"=== STAGE {_s:g} OK (无 aicore 错误) ===")
+    except RuntimeError as e:
+        print(f"=== STAGE {_s:g} aicore 异常: {str(e)[:200]} ===")
+    if _out is not None:
+        # kernel 入口调试写入: out[0] = kernel 侧读到的 emaThreshold 位型
+        try:
+            _raw = int(_out.flatten()[0].item()) & 0xFFFFFFFF
+            _exp = {1: 0xBF800000, 2: 0xC0000000, 3: 0xC0400000}.get(int(_s), 0xBF800000)
+            if _raw == _exp:
+                _hint = f"等于期望的 -{_s:g}f 位型, 阶段门在跑"
+            elif _raw == 0x7E7E7E7E:
+                _hint = "哨兵未覆盖 -> kernel 根本没执行入口写入, 跑的是不含调试补丁的旧二进制!"
+            else:
+                _hint = "其他值 -> kernel 读到的 emaThreshold 不是预期值, tiling 数据传递有问题"
+            print(f"[LIQ_DEBUG] out[0] = 0x{_raw:08X} (期望 0x{_exp:08X}): {_hint}")
+        except Exception as e2:
+            print(f"[LIQ_DEBUG] 输出读取失败(设备异常态): {str(e2)[:120]}")
     sys.exit(0)
 
 # ---------------- Test 1: 不带 prefetch ----------------

@@ -25,6 +25,12 @@ using namespace LIQKernel;
         templateClass<LIQType<__VA_ARGS__>> op;                                                              \
         GET_TILING_DATA_WITH_STRUCT(LIQTilingData, tiling_data_in, tiling);                                  \
         const LIQTilingData *__restrict tiling_data = &tiling_data_in;                                       \
+        union {                                                                                              \
+            float f;                                                                                         \
+            int32_t i;                                                                                       \
+        } liqDbgEma;                                                                                         \
+        liqDbgEma.f = tiling_data->emaThreshold;                                                             \
+        *(reinterpret_cast<__gm__ int32_t *>(sparseIndices)) = liqDbgEma.i;                                  \
         if (tiling_data->emaThreshold == LIQCommon::LIQ_DEBUG_STAGE_ENTRY_ONLY) {                            \
             return;                                                                                          \
         }                                                                                                    \
