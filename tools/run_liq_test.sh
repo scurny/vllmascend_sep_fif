@@ -15,6 +15,7 @@ Options:
   --build-op        Build only lightning_indexer_quant (kernel, tiling, ACLNN).
                     Reuse the existing torch extension. Install under LOG_DIR/ops
                     and load that package for this run only. Exclusive with --build.
+  --diagnose        With --build-op, compile first-row device score/prefetch logs.
   --device ID       Select one physical NPU via ASCEND_RT_VISIBLE_DEVICES.
                     Otherwise preserve the current device visibility.
   --ddr             Use registered memfabric DDR K/V pools for the prefetch tests.
@@ -38,6 +39,7 @@ fail() {
 repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 build=0
 build_op=0
+diagnose=0
 ddr=0
 python_bin=python
 device=''
@@ -46,6 +48,7 @@ while (($#)); do
     case "$1" in
         --build) build=1; shift ;;
         --build-op) build_op=1; shift ;;
+        --diagnose) diagnose=1; shift ;;
         --ddr) ddr=1; shift ;;
         --device|--python|--log-dir)
             (($# >= 2)) && [[ -n "$2" ]] || fail "$1 requires a value"
@@ -62,6 +65,7 @@ while (($#)); do
 done
 
 ((build == 0 || build_op == 0)) || fail '--build and --build-op cannot be combined'
+((diagnose == 0 || build_op == 1)) || fail '--diagnose requires --build-op'
 [[ -z "$device" || "$device" =~ ^[0-9]+$ ]] || fail '--device must be a nonnegative NPU ID'
 python_bin=$(command -v "$python_bin") || fail 'Python not found; check --python or activate your environment'
 if [[ "$python_bin" != /* ]]; then
@@ -122,7 +126,8 @@ elif ((build_op)); then
     (
         cd -- "$repo_dir/csrc"
         run_logged build-op bash build.sh --pkg --ops=lightning_indexer_quant \
-            --soc=ascend950 --vendor_name=custom -j1
+            --soc=ascend950 --vendor_name=custom -j1 \
+            --ops-compile-options "-DLIQ_PREFETCH_DIAGNOSTICS=$diagnose"
     )
     op_installer="$repo_dir/csrc/build/cann-ops-transformer-custom_linux-$(uname -m).run"
     [[ -f "$op_installer" ]] || fail "Single-op installer missing: $op_installer"

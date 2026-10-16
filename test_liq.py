@@ -4,6 +4,7 @@ import torch
 import torch_npu
 
 from tools.liq_test_correctness import run_correctness_cases
+from tools.liq_test_diagnostics import T2bFailureDiagnostics, t2b_failure_lines
 from tools.liq_test_limits import run_limits_cases
 from tools.liq_test_memory import make_source_pools
 from tools.liq_test_mutation import run_mutation_cases
@@ -103,12 +104,22 @@ print("=== Test 2a PASS ===")
 # ---------------- Test 2b: 真实 prefetch ----------------
 print("=== Test 2b: 真实 prefetch ===")
 staging, counter, slot_map = make_prefetch_tensors()
+staging.fill_(0xA5)
 out2b = run_op(token_gva_table=token_gva_table, prefetch_staging_buf=staging,
                prefetch_slot_counter=counter, token_to_prefetch_slot=slot_map,
                ema_threshold=PREFETCH_HIT_THRESHOLD, token_size_bytes_k=token_size_bytes_k)
 check_out("[T2b]", out2b)
 used = int((slot_map[0] != -1).sum().item())
 print("[T2b] used slots:", used)
+if used != prefetch_hits_per_row:
+    diagnostics = T2bFailureDiagnostics(
+        staging=staging, slot_map=slot_map, output=out2b, query=query, key=key,
+        weights=weights, query_dequant_scale=query_dequant_scale,
+        key_dequant_scale=key_dequant_scale, threshold=PREFETCH_HIT_THRESHOLD,
+        hot_tokens=torch.arange(256, 256 + prefetch_hits_per_row),
+    )
+    for line in t2b_failure_lines(diagnostics):
+        print(line)
 assert used == prefetch_hits_per_row, used
 hit_tokens = (slot_map[0].cpu() >= 0).nonzero().flatten()
 assert torch.equal(hit_tokens, torch.arange(256, 256 + prefetch_hits_per_row))

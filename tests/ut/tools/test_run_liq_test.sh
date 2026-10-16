@@ -86,6 +86,8 @@ check_status 2 bash "$runner" --device invalid
 check_status 2 bash "$runner" --log-dir ''
 check_status 2 bash "$runner" --python "$scratch/missing"
 check_status 2 bash "$runner" --build --build-op
+check_status 2 bash "$runner" --diagnose
+check_status 2 bash "$runner" --build --diagnose
 
 cd /tmp
 check_status 0 env LIQ_STAGE=1 bash "$runner" --log-dir "$scratch/test log"
@@ -110,13 +112,21 @@ check_status 0 bash "$runner" --build-op --log-dir "$op_log"
 rg -qx -- '--ops=lightning_indexer_quant' "$scratch/repo/csrc/build-arguments"
 rg -qx -- '--soc=ascend950' "$scratch/repo/csrc/build-arguments"
 rg -qx -- '--pkg' "$scratch/repo/csrc/build-arguments"
+rg -qx -- '-DLIQ_PREFETCH_DIAGNOSTICS=0' "$scratch/repo/csrc/build-arguments"
 [[ -f "$op_log/build-op.log" && -f "$op_log/install-op.log" && -f "$op_log/test.log" ]]
 check_status 2 bash "$runner" --build-op --log-dir "$op_log"
 [[ "$(cat "$op_log/ops/vendors/custom_transformer/op_api/lib/libcust_opapi.so")" == single-op ]]
 
+diagnostic_log="$scratch/diagnostic"
+printf '%s\n' "$diagnostic_log/ops/vendors/custom_transformer" > "$scratch/repo/expected-vendor"
+check_status 0 bash "$runner" --build-op --diagnose --log-dir "$diagnostic_log"
+rg -qx -- '--ops-compile-options' "$scratch/repo/csrc/build-arguments"
+rg -qx -- '-DLIQ_PREFETCH_DIAGNOSTICS=1' "$scratch/repo/csrc/build-arguments"
+
 mv "$full_vendor" "$scratch/full-vendor-hidden"
 printf '%s\n' "$scratch/only-op/ops/vendors/custom_transformer" > "$scratch/repo/expected-vendor"
 check_status 0 bash "$runner" --build-op --log-dir "$scratch/only-op"
+rg -qx -- '-DLIQ_PREFETCH_DIAGNOSTICS=0' "$scratch/repo/csrc/build-arguments"
 mv "$scratch/full-vendor-hidden" "$full_vendor"
 
 printf '23\n' > "$scratch/repo/op-build-status"

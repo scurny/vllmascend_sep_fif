@@ -14,17 +14,39 @@
  */
 
 #include "kernel_operator.h"
+#if defined(LIQ_PREFETCH_DIAGNOSTICS) && LIQ_PREFETCH_DIAGNOSTICS
+#include "utils/debug/asc_printf.h"
+#endif
 #include "lib/matmul_intf.h"
 #include "arch35/lightning_indexer_quant_kernel_arch35.h"
 #include "lightning_indexer_quant_template_tiling_key.h"
 
 using namespace LIQKernel;
 
+#if defined(LIQ_PREFETCH_DIAGNOSTICS) && LIQ_PREFETCH_DIAGNOSTICS
+#define LIQ_PREFETCH_ENTRY_DIAGNOSTICS(tilingData, gvaTable, stagingBuf, slotCounter, slotMap)              \
+    do {                                                                                                      \
+        if (ASCEND_IS_AIV && GetBlockIdx() == 0) {                                                           \
+            AscendC::printf("[LIQ_DIAG] entry v1 built=%s %s ema=%f max=%u entry_k=%u gva=%d staging=%d counter=%d " \
+                            "slot=%d\n",                                                                      \
+                   __DATE__, __TIME__, static_cast<float>((tilingData)->emaThreshold),                      \
+                   static_cast<uint32_t>((tilingData)->prefetchCandidateMax),                                \
+                   static_cast<uint32_t>((tilingData)->tokenSizeBytesK),                                    \
+                   static_cast<int32_t>((gvaTable) != nullptr), static_cast<int32_t>((stagingBuf) != nullptr), \
+                   static_cast<int32_t>((slotCounter) != nullptr), static_cast<int32_t>((slotMap) != nullptr)); \
+        }                                                                                                     \
+    } while (0)
+#else
+#define LIQ_PREFETCH_ENTRY_DIAGNOSTICS(tilingData, gvaTable, stagingBuf, slotCounter, slotMap) do { } while (0)
+#endif
+
 #define INVOKE_LI_NO_KFC_OP_IMPL(templateClass, ...)                                                         \
     do {                                                                                                     \
         templateClass<LIQType<__VA_ARGS__>> op;                                                              \
         GET_TILING_DATA_WITH_STRUCT(LIQTilingData, tiling_data_in, tiling);                                  \
         const LIQTilingData *__restrict tiling_data = &tiling_data_in;                                       \
+        LIQ_PREFETCH_ENTRY_DIAGNOSTICS(tiling_data, tokenGvaTable, prefetchStagingBuf,                      \
+                                       prefetchSlotCounter, tokenToPrefetchSlot);                            \
         op.Init(query, key, weights, queryScale, keyScale, actualSeqLengthsQ, actualSeqLengthsK, blocktable, \
                 sparseIndices, user, tiling_data, &tPipe,                                                    \
                 tokenGvaTable, prefetchStagingBuf, prefetchSlotCounter, tokenToPrefetchSlot);                \

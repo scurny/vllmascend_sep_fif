@@ -16,6 +16,9 @@
 #define LIGHTNING_INDEXER_QUANT_SERVICE_VECTOR_H
 
 #include "kernel_operator.h"
+#if defined(LIQ_PREFETCH_DIAGNOSTICS) && LIQ_PREFETCH_DIAGNOSTICS
+#include "utils/debug/asc_printf.h"
+#endif
 #if (__CCE_AICORE__ == 310)
 #include "basic_api/kernel_operator_atomic_intf.h"
 #endif
@@ -62,7 +65,8 @@ public:
                                                GlobalTensor<int32_t> tokenToPrefetchSlotGm);
     __aicore__ inline void PrefetchScoresInVec1(const LocalTensor<float> &scoresUb,
                                                 const LIQCommon::RunInfo &info,
-                                                uint32_t cuS2Len, uint32_t cuBaseS2Idx);
+                                                uint32_t cuS2Len, uint32_t cuBaseS2Idx,
+                                                bool isFirstLogicalRow);
     __aicore__ inline void CleanInvalidOutput(int64_t invalidS1offset);
     __aicore__ inline void AllocEventID();
     __aicore__ inline void FreeEventID();
@@ -301,14 +305,28 @@ __aicore__ inline void LIQVector<LIQT>::InitPrefetchTensors(
 template <typename LIQT>
 __aicore__ inline void LIQVector<LIQT>::PrefetchScoresInVec1(
     const LocalTensor<float> &scoresUb, const LIQCommon::RunInfo &info,
-    uint32_t cuS2Len, uint32_t cuBaseS2Idx)
+    uint32_t cuS2Len, uint32_t cuBaseS2Idx, bool isFirstLogicalRow)
 {
+#if !(defined(LIQ_PREFETCH_DIAGNOSTICS) && LIQ_PREFETCH_DIAGNOSTICS)
+    (void)isFirstLogicalRow;
+#endif
     // 仅 emaThreshold > 0 且 prefetch 输入已提供时触发 prefetch
     if (constInfo_.emaThreshold <= 0.0f || prefetchCandidateMax_ == 0 || kEntryBytes_ == 0) {
+#if defined(LIQ_PREFETCH_DIAGNOSTICS) && LIQ_PREFETCH_DIAGNOSTICS
+        if (isFirstLogicalRow) {
+            AscendC::printf("[LIQ_DIAG] prefetch skipped reason=disabled ema=%f max=%u entry=%u\n",
+                   static_cast<float>(constInfo_.emaThreshold), prefetchCandidateMax_, kEntryBytes_);
+        }
+#endif
         return;
     }
 
     if (cuS2Len == 0) {
+#if defined(LIQ_PREFETCH_DIAGNOSTICS) && LIQ_PREFETCH_DIAGNOSTICS
+        if (isFirstLogicalRow) {
+            AscendC::printf("[LIQ_DIAG] prefetch skipped reason=empty_row\n");
+        }
+#endif
         return;
     }
 
@@ -317,10 +335,61 @@ __aicore__ inline void LIQVector<LIQT>::PrefetchScoresInVec1(
     int32_t slotsPerCore = prefetchCandidateMax_ / numCores;
 
     if (slotsPerCore <= 0) {
+#if defined(LIQ_PREFETCH_DIAGNOSTICS) && LIQ_PREFETCH_DIAGNOSTICS
+        if (isFirstLogicalRow) {
+            AscendC::printf("[LIQ_DIAG] prefetch skipped reason=capacity max=%u cores=%d\n",
+                   prefetchCandidateMax_, numCores);
+        }
+#endif
         return;
     }
 
     int32_t coreSlotBase = blockId_ * slotsPerCore;
+
+#if defined(LIQ_PREFETCH_DIAGNOSTICS) && LIQ_PREFETCH_DIAGNOSTICS
+    float scoreMin = 0.0f;
+    float scoreMax = 0.0f;
+    float score255 = 0.0f;
+    float score256 = 0.0f;
+    float score257 = 0.0f;
+    float score258 = 0.0f;
+    float score259 = 0.0f;
+    float score260 = 0.0f;
+    uint32_t directCandidateCount = 0;
+    uint32_t nanCount = 0;
+    uint32_t infCount = 0;
+    if (isFirstLogicalRow) {
+        SetWaitFlag<HardEvent::V_S>(HardEvent::V_S);
+        scoreMin = scoresUb.GetValue(0);
+        scoreMax = scoreMin;
+        for (uint32_t j = 0; j < cuS2Len; ++j) {
+            const float score = scoresUb.GetValue(j);
+            scoreMin = score < scoreMin ? score : scoreMin;
+            scoreMax = score > scoreMax ? score : scoreMax;
+            directCandidateCount += score > constInfo_.emaThreshold ? 1U : 0U;
+            nanCount += score != score ? 1U : 0U;
+            infCount += score > 3.402823466e+38F || score < -3.402823466e+38F ? 1U : 0U;
+        }
+        if (cuS2Len > 255) {
+            score255 = scoresUb.GetValue(255);
+        }
+        if (cuS2Len > 256) {
+            score256 = scoresUb.GetValue(256);
+        }
+        if (cuS2Len > 257) {
+            score257 = scoresUb.GetValue(257);
+        }
+        if (cuS2Len > 258) {
+            score258 = scoresUb.GetValue(258);
+        }
+        if (cuS2Len > 259) {
+            score259 = scoresUb.GetValue(259);
+        }
+        if (cuS2Len > 260) {
+            score260 = scoresUb.GetValue(260);
+        }
+    }
+#endif
 
     // CompareScalar: scoresUb > emaThreshold → bitmask
     uint32_t cmpLenAlign = LIQCommon::Align(cuS2Len, (uint32_t)32);
@@ -336,18 +405,49 @@ __aicore__ inline void LIQVector<LIQT>::PrefetchScoresInVec1(
     for (uint32_t j = 0; j < cuS2Len; j++) {
         if ((cmpMaskUb_.GetValue(j / 8) >> (j % 8)) & 1) {
             if (validInRow >= MAX_PREFETCH_POSITIONS) {
+#if defined(LIQ_PREFETCH_DIAGNOSTICS) && LIQ_PREFETCH_DIAGNOSTICS
+                if (isFirstLogicalRow) {
+                    AscendC::printf("[LIQ_DIAG] prefetch skipped reason=too_many_candidates limit=%u\n",
+                                   MAX_PREFETCH_POSITIONS);
+                }
+#endif
                 return;
             }
             bitPositions[validInRow++] = j;
         }
     }
 
+#if defined(LIQ_PREFETCH_DIAGNOSTICS) && LIQ_PREFETCH_DIAGNOSTICS
+    if (isFirstLogicalRow) {
+        const uint32_t maskByte32 = cuS2Len > 256 ? static_cast<uint32_t>(cmpMaskUb_.GetValue(32)) : 0U;
+        AscendC::printf("[LIQ_DIAG] row b=%u gs1=%u s2=%u block=%d min=%f max=%f score0=%f "
+               "scores255_260=(%f,%f,%f,%f,%f,%f) direct=%u mask=%u mask_byte32_valid=%d mask_byte32=%u "
+               "nan=%u inf=%u cores=%d slots_per_core=%d\n",
+               static_cast<uint32_t>(info.bIdx), static_cast<uint32_t>(info.gS1Idx),
+               static_cast<uint32_t>(info.s2Idx), static_cast<int32_t>(blockId_), scoreMin, scoreMax,
+               scoresUb.GetValue(0),
+               score255, score256, score257, score258, score259, score260, directCandidateCount, validInRow,
+               static_cast<int32_t>(cuS2Len > 256), maskByte32, nanCount, infCount, numCores, slotsPerCore);
+    }
+#endif
+
     if (validInRow == 0) {
+#if defined(LIQ_PREFETCH_DIAGNOSTICS) && LIQ_PREFETCH_DIAGNOSTICS
+        if (isFirstLogicalRow) {
+            AscendC::printf("[LIQ_DIAG] prefetch skipped reason=no_candidates\n");
+        }
+#endif
         return;
     }
 
     // 检查核内 slot capacity
     if (static_cast<int32_t>(validInRow) > slotsPerCore - prefetchSlotsUsed_) {
+#if defined(LIQ_PREFETCH_DIAGNOSTICS) && LIQ_PREFETCH_DIAGNOSTICS
+        if (isFirstLogicalRow) {
+            AscendC::printf("[LIQ_DIAG] prefetch skipped reason=row_capacity candidates=%u available=%d used=%d\n",
+                   validInRow, slotsPerCore - prefetchSlotsUsed_, prefetchSlotsUsed_);
+        }
+#endif
         return;  // 放弃这行
     }
     int32_t slotStart = coreSlotBase + prefetchSlotsUsed_;
@@ -400,6 +500,18 @@ __aicore__ inline void LIQVector<LIQT>::PrefetchScoresInVec1(
         tokenToPrefetchSlotGm_.SetValue(static_cast<uint64_t>(globalPos), slot);
 #endif
     }
+#if defined(LIQ_PREFETCH_DIAGNOSTICS) && LIQ_PREFETCH_DIAGNOSTICS
+    if (isFirstLogicalRow) {
+        AscendC::printf("[LIQ_DIAG] published count=%u slot_start=%d slots_used=%d map_write=%s\n",
+               validInRow, slotStart, prefetchSlotsUsed_,
+#if (__CCE_AICORE__ == 310)
+               "AtomicExch"
+#else
+               "SetValue"
+#endif
+        );
+    }
+#endif
 }
 
 template <typename LIQT>
@@ -532,10 +644,25 @@ __aicore__ inline void LIQVector<LIQT>::ProcessVec1(const LIQCommon::RunInfo &in
             mmInUb = inQueue_.DeQue<float>();
             AscendC::Cast(kScaleUb, kScaleTUb, RoundMode::CAST_NONE, cuS2Len);
             PipeBarrier<PIPE_V>();
+#if defined(LIQ_PREFETCH_DIAGNOSTICS) && LIQ_PREFETCH_DIAGNOSTICS
+            const bool isFirstLogicalRow =
+                blockId_ == 0 && info.bIdx == 0 && info.gS1Idx == 0 && info.s2Idx == 0 && innerS1Idx == 0;
+            if (isFirstLogicalRow) {
+                SetWaitFlag<HardEvent::V_S>(HardEvent::V_S);
+                const float mm256 = cuS2Len > 256 ? mmInUb.GetValue(256) : 0.0f;
+                const float scale256 = cuS2Len > 256 ? kScaleUb.GetValue(256) : 0.0f;
+                AscendC::printf("[LIQ_DIAG] pre_mul mm0=%f mm256_valid=%d mm256=%f scale0=%f scale256_valid=%d scale256=%f\n",
+                       mmInUb.GetValue(0), static_cast<int32_t>(cuS2Len > 256), mm256, kScaleUb.GetValue(0),
+                       static_cast<int32_t>(cuS2Len > 256), scale256);
+                SetWaitFlag<HardEvent::S_V>(HardEvent::S_V);
+            }
+#else
+            const bool isFirstLogicalRow = false;
+#endif
             AscendC::Mul(mmInUb, mmInUb, kScaleUb, cuS2Len);
             PipeBarrier<PIPE_V>();
             //---- ECHO-style prefetch: 对当前 S1 行的 scores 做 threshold 比较并触发 H2D ----
-            PrefetchScoresInVec1(mmInUb, info, cuS2Len, cuBaseS2Idx);
+            PrefetchScoresInVec1(mmInUb, info, cuS2Len, cuBaseS2Idx, isFirstLogicalRow);
             LocalTensor<float> sortBuff = tmpBuf_.Get<float>();
             LocalTensor<float> sortScoreUb = sortBuff;
             LocalTensor<float> sortIndiceUb = sortBuff[cuS2LenVecAlign];

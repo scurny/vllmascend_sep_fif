@@ -84,6 +84,7 @@ def negative_ema_binary(tmp_path_factory: pytest.TempPathFactory) -> Path:
         "template <typename> struct InvokePreload : Preload {};\n"
         "#define __aicore__\n"
         "#define GET_TILING_DATA_WITH_STRUCT(type, destination, source) type destination { source };\n"
+        "#define LIQ_PREFETCH_ENTRY_DIAGNOSTICS(...) do { } while (0)\n"
         + invoke_macro
         + "\n"
         + process_body
