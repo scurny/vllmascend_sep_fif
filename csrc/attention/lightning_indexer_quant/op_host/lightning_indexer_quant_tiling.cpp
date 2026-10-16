@@ -104,6 +104,10 @@ ge::graphStatus LIQInfoParser::GetNpuInfo()
     uint32_t aivNum = ascendcPlatform.GetCoreNumAiv();
     uint32_t aicNum = ascendcPlatform.GetCoreNumAic();
     OPS_ERR_IF(aicNum == 0 || aivNum == 0, OPS_LOG_E(opName_, "num of core obtained is 0."), return GRAPH_FAILED);
+    ascendcPlatform.GetCoreMemSize(platform_ascendc::CoreMemType::UB, ubSize_);
+    OPS_ERR_IF(!HasLiqBaseUbCapacity(ubSize_),
+               OPS_LOG_E(opName_, "UB size %lu cannot hold the LIQ base buffers and safety reserve", ubSize_),
+               return GRAPH_FAILED);
 
     socVersion_ = ascendcPlatform.GetSocVersion();
     printf("[LIQ_TILING] GetNpuInfo: socVersion=%d aivNum=%u aicNum=%u\n", static_cast<int32_t>(socVersion_), aivNum,
@@ -387,12 +391,14 @@ ge::graphStatus LIQInfoParser::CheckShapeDim()
 
 ge::graphStatus LIQInfoParser::GetN1Size()
 {
-    if (qLayout_ == DataLayout::BSND) {
-        n1Size_ = static_cast<uint32_t>(opParamInfo_.query.shape->GetStorageShape().GetDim(DIM_IDX_TWO));
-    } else {
-        // TND
-        n1Size_ = static_cast<uint32_t>(opParamInfo_.query.shape->GetStorageShape().GetDim(DIM_IDX_ONE));
-    }
+    const int64_t queryHeadCount = qLayout_ == DataLayout::BSND
+                                       ? opParamInfo_.query.shape->GetStorageShape().GetDim(DIM_IDX_TWO)
+                                       : opParamInfo_.query.shape->GetStorageShape().GetDim(DIM_IDX_ONE);
+    OPS_ERR_IF(!IsSupportedLiqQueryHeadCount(queryHeadCount),
+               OPS_LOG_E(opName_, "input query head count only supports %u, but now is %ld.", LIQ_QUERY_HEAD_COUNT,
+                         queryHeadCount),
+               return ge::GRAPH_FAILED);
+    n1Size_ = static_cast<uint32_t>(queryHeadCount);
     OPS_LOG_I(context_->GetNodeName(), "n1Size is %d", n1Size_);
     return ge::GRAPH_SUCCESS;
 }
@@ -717,6 +723,10 @@ ge::graphStatus LIQInfoParser::CheckPrefetchParams()
     constexpr int64_t PREFETCH_DMA_ALIGNMENT = 32;
     OPS_ERR_IF(kBytes % PREFETCH_DMA_ALIGNMENT != 0 || entryBytes % PREFETCH_DMA_ALIGNMENT != 0,
                OPS_LOG_E(opName_, "prefetch K and V byte lengths must be 32-byte aligned"),
+               return ge::GRAPH_FAILED);
+    OPS_ERR_IF(!HasLiqPrefetchUbCapacity(ubSize_, static_cast<uint64_t>(entryBytes)),
+               OPS_LOG_E(opName_, "prefetch staging entry_bytes %ld exceeds available UB capacity %lu", entryBytes,
+                         ubSize_),
                return ge::GRAPH_FAILED);
     tokenSizeBytesK_ = static_cast<uint32_t>(kBytes);
     return ge::GRAPH_SUCCESS;

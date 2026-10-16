@@ -18,6 +18,7 @@
 
 #include "error/ops_error.h"
 #include "exe_graph/runtime/tiling_context.h"
+#include "lightning_indexer_quant_tiling_limits.h"
 #include "platform/platform_info.h"
 #include "register/op_def_registry.h"
 #include "register/tilingdata_base.h"
@@ -80,7 +81,6 @@ constexpr uint32_t DIM_NUM_FOUR = 4;
 // 入参限制常量
 constexpr uint32_t HEAD_DIM_LIMIT = 128;
 constexpr uint32_t SPARSE_LIMIT = 2048;
-constexpr uint32_t G_SIZE_LIMIT = 64;
 constexpr uint32_t BLOCK_SIZE_LIMIT = 1024;
 constexpr uint32_t BLOCK_SIZE_FACTOR = 16;
 constexpr uint32_t SPARSE_MODE_LOWER = 3;
@@ -230,6 +230,7 @@ public:
     int64_t s2Size_ = 0;
     uint32_t headDim_ = 0;
     uint32_t tokenSizeBytesK_ = 0;
+    uint64_t ubSize_ = 0;
     // Layout
     DataLayout qLayout_ = DataLayout::BSND;
     DataLayout kLayout_ = DataLayout::PA_BSND;
