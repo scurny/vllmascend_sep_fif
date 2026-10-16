@@ -1,106 +1,61 @@
-[root@[localhost](https://localhost) vllmascend_sep_fif]# ASCEND_RT_VISIBLE_DEVICES=0 timeout 300 python3.11 -u test_liq.py 2>&1 | tail -60; echo "exit=$?"
-[LIQ_TILING] DoTiling ret=0
+[root@[localhost](https://localhost) vllmascend_sep_fif]# ASCEND_RT_VISIBLE_DEVICES=0 LIQ_FILL=1 timeout 300 python3.11 -u test_liq.py 2>&1 | grep -v LIQ_TILING | tail -70
+INFO 10-16 18:15:03 [**init**.py:52] Available plugins for group vllm.platform_plugins:
+INFO 10-16 18:15:03 [**init**.py:54] - ascend -> vllm_ascend:register
+INFO 10-16 18:15:03 [**init**.py:57] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+INFO 10-16 18:15:03 [**init**.py:237] Platform plugin ascend is activated
+INFO 10-16 18:15:03 [platform.py:71] Breakable CUDAGraph on Ascend is opt-in; using VLLM_USE_BREAKABLE_CUDAGRAPH=0.
+[LIQ_ADPT] enter npu_lightning_indexer_quant (adpt built Oct 16 2026 18:14:14)
+[LIQ_ADPT] before EXEC_NPU_CMD: q=[1,64,128] k=[100,128,1,128] layout=TND/PA_BSND sparse_count=2048 sparse_mode=3 ema=0.000000 tskb=0 has_gva=0 has_staging=0 has_counter=0 has_slot=0
 [LIQ_ADPT] after EXEC_NPU_CMD: out=[1,1,2048]
 [T1 s0] shape: (1, 1, 2048) dtype: torch.int32
-[T1 s0] sample: [0, 705018445, -957270746, -829024977, 1929003972, -289395698, 1619919698, 70851338, 488092478, 1033513638, -1982219306, -1968092770, 1064632970, 1530992303, 485309188, 683442997]
-[T1 s0] min/max: -1982219306 1929003972
+[T1 s0] sample: [0, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134]
+[T1 s0] min/max: 0 2122219134
+[T1 s0] [FILL] kernel 覆盖 2033/2048 单元，非哨兵中合法索引数 2033; 非哨兵前 12: [0, 146, 149, 151, 152, 153, 154, 156, 157, 158, 161, 164]
 === Test 1 seed=0 FAIL ===
-[LIQ_ADPT] enter npu_lightning_indexer_quant (adpt built Oct 16 2026 13:16:00)
+[LIQ_ADPT] enter npu_lightning_indexer_quant (adpt built Oct 16 2026 18:14:14)
 [LIQ_ADPT] before EXEC_NPU_CMD: q=[1,64,128] k=[100,128,1,128] layout=TND/PA_BSND sparse_count=2048 sparse_mode=3 ema=0.000000 tskb=0 has_gva=0 has_staging=0 has_counter=0 has_slot=0
 [LIQ_ADPT] after EXEC_NPU_CMD: out=[1,1,2048]
 [T1 s1] shape: (1, 1, 2048) dtype: torch.int32
-[T1 s1] sample: [0, -1113836644, -1074254262, 988231776, 907296363, 963854120, -1100629050, -1068781350, 1007369237, 880980999, 902150710, -1202769134, -1134773319, 1008809304, 945175718, -1268370510]
-[T1 s1] min/max: -1268370510 1008809304
+[T1 s1] sample: [0, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134]
+[T1 s1] min/max: 0 2122219134
+[T1 s1] [FILL] kernel 覆盖 2033/2048 单元，非哨兵中合法索引数 2033; 非哨兵前 12: [0, 146, 147, 148, 149, 150, 151, 152, 154, 155, 156, 158]
 === Test 1 seed=1 FAIL ===
-[LIQ_ADPT] enter npu_lightning_indexer_quant (adpt built Oct 16 2026 13:16:00)
+[LIQ_ADPT] enter npu_lightning_indexer_quant (adpt built Oct 16 2026 18:14:14)
 [LIQ_ADPT] before EXEC_NPU_CMD: q=[1,64,128] k=[100,128,1,128] layout=TND/PA_BSND sparse_count=2048 sparse_mode=3 ema=0.000000 tskb=0 has_gva=0 has_staging=0 has_counter=0 has_slot=0
 [LIQ_ADPT] after EXEC_NPU_CMD: out=[1,1,2048]
 [T1 s2] shape: (1, 1, 2048) dtype: torch.int32
-[T1 s2] sample: [0, -1666156784, -732947555, 711486929, 1923521411, 468855991, 1961879887, 10658148, -274746459, 1017582149, 287533135, -1844237916, -2025761069, -25551807, -976107236, 331652337]
-[T1 s2] min/max: -2025761069 1961879887
+[T1 s2] sample: [0, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134]
+[T1 s2] min/max: 0 2122219134
+[T1 s2] [FILL] kernel 覆盖 2033/2048 单元，非哨兵中合法索引数 2033; 非哨兵前 12: [0, 150, 152, 155, 156, 157, 158, 159, 160, 161, 163, 164]
 === Test 1 seed=2 FAIL ===
 === Test 2a: prefetch 开启，阈值巨大 (零触发) ===
-[LIQ_ADPT] enter npu_lightning_indexer_quant (adpt built Oct 16 2026 13:16:00)
+[LIQ_ADPT] enter npu_lightning_indexer_quant (adpt built Oct 16 2026 18:14:14)
 [LIQ_ADPT] before EXEC_NPU_CMD: q=[1,64,128] k=[100,128,1,128] layout=TND/PA_BSND sparse_count=2048 sparse_mode=3 ema=1000000000000000019884624838656.000000 tskb=256 has_gva=1 has_staging=1 has_counter=1 has_slot=1
-[LIQ_TILING] enter TilingForLightningIndexerQuant
-[LIQ_TILING] GetNpuInfo: socVersion=4 aivNum=64 aicNum=32
-[LIQ_TILING] GenerateInfo: emaThreshold=1000000015047466219876688855040.000000 stagingBuf=present gvaTable=present counter=present slot=present tokenSizeBytesKAttr=present
-[LIQ_TILING] prefetch enabled: prefetchCandidateMax=4096 kEntryBytes=384 tokenSizeBytesK=256
-[LIQ_TILING] TilingBuf: capacity=64 dataSize=56 sizeof (LIQTilingData)=664 emaBits=0x7149F2CA
-[LIQ_TILING] DoTiling ret=0
 [LIQ_ADPT] after EXEC_NPU_CMD: out=[1,1,2048]
 [T2a] shape: (1, 1, 2048) dtype: torch.int32
-[T2a] sample: [1900671690, -1080817861, -1452400221, 1252741375, 1906520288, 510613169, -1505104270, 2128585925, 1033850467, -326505479, -1808403084, -5894332, 1646281448, -268278115, 1276133408, -1270283991]
-[T2a] min/max: -1808403084 2128585925
+[T2a] sample: [1900671690, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134]
+[T2a] min/max: 0 2122219134
+[T2a] [FILL] kernel 覆盖 2033/2048 单元，非哨兵中合法索引数 2032; 非哨兵前 12: [1900671690, 146, 149, 151, 152, 153, 154, 156, 157, 158, 161, 164]
 [T2a] used slots: 0 (应为 0)
 === Test 2a FAIL ===
 === Test 2b: 真实 prefetch ===
-[LIQ_ADPT] enter npu_lightning_indexer_quant (adpt built Oct 16 2026 13:16:00)
+[LIQ_ADPT] enter npu_lightning_indexer_quant (adpt built Oct 16 2026 18:14:14)
 [LIQ_ADPT] before EXEC_NPU_CMD: q=[1,64,128] k=[100,128,1,128] layout=TND/PA_BSND sparse_count=2048 sparse_mode=3 ema=200000.000000 tskb=256 has_gva=1 has_staging=1 has_counter=1 has_slot=1
-[LIQ_TILING] enter TilingForLightningIndexerQuant
-[LIQ_TILING] GetNpuInfo: socVersion=4 aivNum=64 aicNum=32
-[LIQ_TILING] GenerateInfo: emaThreshold=200000.000000 stagingBuf=present gvaTable=present counter=present slot=present tokenSizeBytesKAttr=present
-[LIQ_TILING] prefetch enabled: prefetchCandidateMax=4096 kEntryBytes=384 tokenSizeBytesK=256
-[LIQ_TILING] TilingBuf: capacity=64 dataSize=56 sizeof (LIQTilingData)=664 emaBits=0x48435000
-[LIQ_TILING] DoTiling ret=0
 [LIQ_ADPT] after EXEC_NPU_CMD: out=[1,1,2048]
 [T2b] shape: (1, 1, 2048) dtype: torch.int32
-[T2b] sample: [1212370944, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-[T2b] min/max: 0 1212370944
+[T2b] sample: [1212370944, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134]
+[T2b] min/max: 0 2122219134
+[T2b] [FILL] kernel 覆盖 2033/2048 单元，非哨兵中合法索引数 2032; 非哨兵前 12: [1212370944, 146, 149, 151, 152, 153, 154, 156, 157, 158, 161, 164]
 [T2b] used slots: 3
-[T2b] token 2206 -> slot 128: K bytes match=False, V bytes match=False
-[T2b] token 2534 -> slot 129: K bytes match=False, V bytes match=False
-[T2b] token 3742 -> slot 130: K bytes match=False, V bytes match=False
+[T2b] token 2206 -> slot 128: K=False V=False, staging 全零 = False, staging 前 8B=[252, 20, 33, 88, 113, 16, 250, 3], 期望前 8B=[71, 7, 60, 215, 58, 48, 60, 141]
+[T2b] token 2534 -> slot 129: K=False V=False, staging 全零 = False, staging 前 8B=[252, 20, 33, 88, 113, 16, 250, 3], 期望前 8B=[166, 236, 88, 241, 145, 169, 144, 107]
+[T2b] token 3742 -> slot 130: K=False V=False, staging 全零 = False, staging 前 8B=[166, 236, 88, 241, 145, 169, 144, 107], 期望前 8B=[252, 20, 33, 88, 113, 16, 250, 3]
 === Test 2b FAIL ===
 ==== 存在失败项 ====
 
-- [T1 seed=0] row0: 索引越界 (min=-1982219306, max=1929003972, valid=4096)
-- [T1 seed=1] row0: 索引越界 (min=-1268370510, max=1008809304, valid=4096)
-- [T1 seed=2] row0: 索引越界 (min=-2025761069, max=1961879887, valid=4096)
-- [T2a] row0: 索引越界 (min=-1808403084, max=2128585925, valid=4096)
-- [T2b] row0: 索引越界 (min=0, max=1212370944, valid=4096)
+- [T1 seed=0] row0: 索引越界 (min=0, max=2122219134, valid=4096)
+- [T1 seed=1] row0: 索引越界 (min=0, max=2122219134, valid=4096)
+- [T1 seed=2] row0: 索引越界 (min=0, max=2122219134, valid=4096)
+- [T2a] row0: 索引越界 (min=0, max=2122219134, valid=4096)
+- [T2b] row0: 索引越界 (min=0, max=2122219134, valid=4096)
 - [T2b] 3 个 slot 搬运内容与源不符
-exit=0
-[root@[localhost](https://localhost) vllmascend_sep_fif]# ASCEND_RT_VISIBLE_DEVICES=0 LIQ_TOPK=1024 LIQ_ASL=2048 LIQ_BLOCKNUM=16 
-timeout 300 python3.11 -u test_liq.py 2>&1 | tail -40; echo "exit=$?"
-[LIQ_TILING] GenerateInfo: emaThreshold=1000000015047466219876688855040.000000 stagingBuf=present gvaTable=present counter=present slot=present tokenSizeBytesKAttr=present
-[LIQ_TILING] prefetch enabled: prefetchCandidateMax=2048 kEntryBytes=384 tokenSizeBytesK=256
-[LIQ_TILING] TilingBuf: capacity=64 dataSize=56 sizeof (LIQTilingData)=664 emaBits=0x7149F2CA
-[LIQ_TILING] DoTiling ret=0
-[LIQ_ADPT] after EXEC_NPU_CMD: out=[1,1,1024]
-[T2a] shape: (1, 1, 1024) dtype: torch.int32
-[T2a] sample: [1900671690, -1333184339, 941635144, -1214306189, -1239860133, -1155353012, 957561911, 970735573, 855184828, -1320633013, -1108266497, 989183272, 1036169851, -1131070428, 957528814, -1087261933]
-[T2a] min/max: -1333184339 1900671690
-[T2a] used slots: 0 (应为 0)
-=== Test 2a FAIL ===
-=== Test 2b: 真实 prefetch ===
-[LIQ_ADPT] enter npu_lightning_indexer_quant (adpt built Oct 16 2026 13:16:00)
-[LIQ_ADPT] before EXEC_NPU_CMD: q=[1,64,128] k=[16,128,1,128] layout=TND/PA_BSND sparse_count=1024 sparse_mode=3 ema=200000.000000 tskb=256 has_gva=1 has_staging=1 has_counter=1 has_slot=1
-[LIQ_TILING] enter TilingForLightningIndexerQuant
-[LIQ_TILING] GetNpuInfo: socVersion=4 aivNum=64 aicNum=32
-[LIQ_TILING] GenerateInfo: emaThreshold=200000.000000 stagingBuf=present gvaTable=present counter=present slot=present tokenSizeBytesKAttr=present
-[LIQ_TILING] prefetch enabled: prefetchCandidateMax=2048 kEntryBytes=384 tokenSizeBytesK=256
-[LIQ_TILING] TilingBuf: capacity=64 dataSize=56 sizeof (LIQTilingData)=664 emaBits=0x48435000
-[LIQ_TILING] DoTiling ret=0
-[LIQ_ADPT] after EXEC_NPU_CMD: out=[1,1,1024]
-[T2b] shape: (1, 1, 1024) dtype: torch.int32
-[T2b] sample: [1212370944, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-[T2b] min/max: 0 1212370944
-[T2b] used slots: 8
-[T2b] token 399 -> slot 0: K bytes match=False, V bytes match=False
-[T2b] token 411 -> slot 1: K bytes match=False, V bytes match=False
-[T2b] token 923 -> slot 2: K bytes match=False, V bytes match=False
-[T2b] token 1167 -> slot 3: K bytes match=False, V bytes match=False
-[T2b] token 1179 -> slot 4: K bytes match=False, V bytes match=False
-[T2b] token 1199 -> slot 5: K bytes match=False, V bytes match=False
-[T2b] token 1272 -> slot 6: K bytes match=False, V bytes match=False
-[T2b] token 1512 -> slot 7: K bytes match=False, V bytes match=False
-=== Test 2b FAIL ===
-==== 存在失败项 ====
-- [T1 seed=0] row0: 索引越界 (min=-1995989578, max=1613475018, valid=2048)
-- [T1 seed=1] row0: 索引越界 (min=-1282001384, max=1032534482, valid=2048)
-- [T1 seed=2] row0: 索引越界 (min=-2025761069, max=1961879887, valid=2048)
-- [T2a] row0: 索引越界 (min=-1333184339, max=1900671690, valid=2048)
-- [T2b] row0: 索引越界 (min=0, max=1212370944, valid=2048)
-- [T2b] 8 个 slot 搬运内容与源不符
-exit=0

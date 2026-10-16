@@ -373,11 +373,15 @@ __aicore__ inline void LIQVector<LIQT>::PrefetchScoresInVec1(
         GlobalTensor<uint8_t> srcGmV;
         srcGmV.SetGlobalBuffer(reinterpret_cast<__gm__ uint8_t *>(gvaV));
         AscendC::DataCopyPad(prefetchUbLocal_[tokenSizeBytesK_], srcGmV, copyParamsV, padParams);
-        
+        // MTE3(UB→GM) 必须等 MTE2(GM→UB) 装填完成, 否则搬到 staging 的是上一个 token 的残影
+        SetWaitFlag<HardEvent::MTE2_MTE3>(HardEvent::MTE2_MTE3);
+
         // 4. UB→Staging Buffer
         AscendC::DataCopyPad(
         prefetchStagingBufGm_[static_cast<uint64_t>(slot) * static_cast<uint64_t>(kEntryBytes_)],
         prefetchUbLocal_, copyParamsFull);
+        // 下一轮 MTE2 重写 UB 前必须等 MTE3 读走, 防止覆盖未搬完的数据
+        SetWaitFlag<HardEvent::MTE3_MTE2>(HardEvent::MTE3_MTE2);
     }
 }
 

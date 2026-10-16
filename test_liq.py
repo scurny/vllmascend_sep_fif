@@ -58,11 +58,17 @@ def check_out(tag, out):
     print(tag, "min/max:", out.min().item(), out.max().item())  # 索引应在 [-1, asl_k) 内
     if os.environ.get("LIQ_FILL"):
         of = out.flatten().cpu()
-        n_sent = int((of == 0x7E7E7E7E).sum())
-        non_sent = of[of != 0x7E7E7E7E]
+        sent_mask = of == 0x7E7E7E7E
+        n_sent = int(sent_mask.sum())
+        non_sent = of[~sent_mask]
         n_valid = int(((non_sent >= 0) & (non_sent < asl_k)).sum()) if non_sent.numel() else 0
+        pos = (~sent_mask).nonzero().flatten().tolist()
+        vals = non_sent.tolist()
+        asc = all(vals[i] <= vals[i + 1] for i in range(len(vals) - 1))
         print(tag, f"[FILL] kernel 覆盖 {of.numel() - n_sent}/{of.numel()} 单元, "
-                   f"非哨兵中合法索引数 {n_valid}; 非哨兵前12: {non_sent[:12].tolist()}")
+                   f"非哨兵中合法索引数 {n_valid}; 非哨兵前12: {vals[:12]}")
+        print(tag, f"[FILL] 写入位置 首10={pos[:10]} 尾10={pos[-10:]}; "
+                   f"值升序={asc}, 唯一数={len(set(vals))}, 后12={vals[-12:]}")
 
 
 # ---------------- 金标准参考 (与 kernel arch35 精度模型逐位对齐) ----------------
@@ -98,6 +104,15 @@ FAILURES = []
 
 def check_topk_vs_golden(tag, out, score):
     """逐名次比对: 索引不重复/不越界/按分数降序/名次分数与参考一致(容忍 fp16 平分扰动)"""
+    if os.environ.get("LIQ_FILL"):
+        of = out.flatten().cpu()
+        body = of[1:]  # 跳过 out[0] (marker 写入位)
+        written = body[body != 0x7E7E7E7E].long().tolist()
+        valid_len = int((score[0] > float('-inf')).sum())
+        ref = torch.argsort(-score[0])[:min(valid_len, topk)].tolist()
+        inter = len(set(written) & set(ref))
+        print(f"{tag} [SET] kernel 写入 {len(written)} 个值 (唯一 {len(set(written))}), "
+              f"参考 top{len(ref)} 集合交集 {inter}")
     out_idx = out.reshape(-1, out.shape[-1]).cpu()
     for r in range(out_idx.shape[0]):
         oi = out_idx[r].long()
