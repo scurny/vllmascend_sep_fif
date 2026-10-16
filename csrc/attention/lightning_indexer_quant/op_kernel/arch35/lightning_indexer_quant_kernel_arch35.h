@@ -398,9 +398,15 @@ __aicore__ inline void LIQPreload<LIQT>::Init(__gm__ uint8_t *query, __gm__ uint
 
     InitTilingData(tiling);
     InitActualSeqLen(actualSeqLengthsQ, actualSeqLengthsK);
+    if (constInfo.emaThreshold == LIQCommon::LIQ_DEBUG_INIT_TILING) {
+        return;  // LIQ 调试里程碑门: tiling 解析 + seq len 绑定后
+    }
 
     // 计算分核
     SplitCore(aiCoreIdx, usedCoreNum, splitCoreInfo);
+    if (constInfo.emaThreshold == LIQCommon::LIQ_DEBUG_INIT_SPLIT) {
+        return;  // LIQ 调试里程碑门: SplitCore 后
+    }
 
     pipe = tPipe;
     // workspace 内存排布
@@ -465,6 +471,9 @@ __aicore__ inline void LIQPreload<LIQT>::Init(__gm__ uint8_t *query, __gm__ uint
         }
         keyGm.SetGlobalBuffer((__gm__ K_T *)key);
         matmulService.InitMm1GlobalTensor(blockTableGm, keyGm, queryGm, mm1ResGm, weightWorkspaceGm);
+    }
+    if (constInfo.emaThreshold == LIQCommon::LIQ_DEBUG_INIT_BUFBOUND) {
+        return;  // LIQ 调试里程碑门: 全部 buffer 绑定完成, InitBuffers 前
     }
     InitBuffers();
 }
@@ -589,9 +598,11 @@ __aicore__ inline void LIQPreload<LIQT>::CalcRunInfo(uint32_t loop, uint32_t s2L
 template <typename LIQT>
 __aicore__ inline void LIQPreload<LIQT>::Process()
 {
-    if (constInfo.emaThreshold == LIQCommon::LIQ_DEBUG_STAGE_AFTER_INIT ||
-        constInfo.emaThreshold == LIQCommon::LIQ_DEBUG_STAGE_ENTRY_ONLY) {
-        return;  // 调试阶段开关: Init 之后合法提前退出; STAGE 1(-1) 等价于 STAGE 2(-2).
+    const float emaDbg = constInfo.emaThreshold;
+    if (emaDbg < 0.0f && emaDbg != LIQCommon::LIQ_DEBUG_STAGE_AFTER_MAIN &&
+        emaDbg != LIQCommon::LIQ_DEBUG_MAIN_FULL) {
+        return;  // 调试门: 所有 pre-ProcessMain 阶段值(-1/-2/-11..-14)在此合法退出;
+                  // -3/-15 需要跑完 ProcessMain, 不在此退出.
                   // NOTE: Init 之前 return 会让 AIV 从核等协议挂死, 详见 lightning_indexer_quant.cpp 注释
     }
     if (usedCoreNum == 0) {
@@ -602,7 +613,8 @@ __aicore__ inline void LIQPreload<LIQT>::Process()
 
     ProcessMain();
 
-    if (constInfo.emaThreshold == LIQCommon::LIQ_DEBUG_STAGE_AFTER_MAIN) {
+    if (constInfo.emaThreshold == LIQCommon::LIQ_DEBUG_STAGE_AFTER_MAIN ||
+        constInfo.emaThreshold == LIQCommon::LIQ_DEBUG_MAIN_FULL) {
         return;  // 调试阶段开关: 验证 ProcessMain 是否安全 (隔离 ProcessDecode/LD)
     }
 

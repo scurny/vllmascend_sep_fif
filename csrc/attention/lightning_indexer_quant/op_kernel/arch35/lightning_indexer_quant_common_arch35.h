@@ -29,6 +29,12 @@ enum class LI_LAYOUT : uint32_t {
 constexpr float LIQ_DEBUG_STAGE_ENTRY_ONLY = -1.0f;  // 仅入口 + tiling 解析
 constexpr float LIQ_DEBUG_STAGE_AFTER_INIT = -2.0f;  // + Init (InitBuffers/SplitCore/标量GM读)
 constexpr float LIQ_DEBUG_STAGE_AFTER_MAIN = -3.0f;  // + ProcessMain (AIC matmul / AIV Vec0/Vec1)
+// Init 内部里程碑 (在 Init 内 return, 由 Process 顶部门完成合法退出):
+constexpr float LIQ_DEBUG_INIT_TILING = -11.0f;      // InitTilingData + InitActualSeqLen 后
+constexpr float LIQ_DEBUG_INIT_SPLIT = -12.0f;       // + SplitCore 后
+constexpr float LIQ_DEBUG_INIT_BUFBOUND = -13.0f;    // + 全部 SetGlobalBuffer/InitParams 后 (InitBuffers 前)
+constexpr float LIQ_DEBUG_INIT_FULL = -14.0f;        // + InitBuffers (完整 Init, 等价 -1/-2)
+constexpr float LIQ_DEBUG_MAIN_FULL = -15.0f;        // + ProcessMain (等价 -3)
 
 template <typename Q_T, typename K_T, typename OUT_T, const bool PAGE_ATTENTION = false,
           LI_LAYOUT Q_LAYOUT_T = LI_LAYOUT::BSND, LI_LAYOUT K_LAYOUT_T = LI_LAYOUT::PA_BSND, typename... Args>

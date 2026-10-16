@@ -83,7 +83,8 @@ if _stage:
         # kernel 入口调试写入: out[0] = kernel 侧读到的 emaThreshold 位型
         try:
             _raw = int(_out.flatten()[0].item()) & 0xFFFFFFFF
-            _exp = {1: 0xBF800000, 2: 0xC0000000, 3: 0xC0400000}.get(int(_s), 0xBF800000)
+            _exp = {1: 0xBF800000, 2: 0xC0000000, 3: 0xC0400000, 14: 0xC1600000, 15: 0xC1700000,
+                    11: 0xC1300000, 12: 0xC1400000, 13: 0xC1500000}.get(int(_s), 0xBF800000)
             if _raw == _exp:
                 _hint = f"等于期望的 -{_s:g}f 位型, 阶段门在跑"
             elif _raw == 0x7E7E7E7E:
