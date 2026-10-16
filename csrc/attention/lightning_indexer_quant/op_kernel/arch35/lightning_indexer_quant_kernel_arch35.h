@@ -589,9 +589,6 @@ __aicore__ inline void LIQPreload<LIQT>::CalcRunInfo(uint32_t loop, uint32_t s2L
 template <typename LIQT>
 __aicore__ inline void LIQPreload<LIQT>::Process()
 {
-    if (constInfo.emaThreshold == LIQCommon::LIQ_DEBUG_STAGE_AFTER_INIT) {
-        return;  // 调试阶段开关: 验证 Init (含 InitBuffers/SplitCore) 是否安全
-    }
     if (usedCoreNum == 0) {
         // 没有计算任务，直接清理输出
         ProcessInvalid();
@@ -599,11 +596,6 @@ __aicore__ inline void LIQPreload<LIQT>::Process()
     }
 
     ProcessMain();
-
-    if (constInfo.emaThreshold == LIQCommon::LIQ_DEBUG_STAGE_AFTER_MAIN) {
-        return;  // 调试阶段开关: 验证 ProcessMain 是否安全 (隔离 ProcessDecode/LD)
-    }
-
     ProcessDecode();
 }
 

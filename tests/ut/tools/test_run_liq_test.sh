@@ -30,7 +30,7 @@ if [[ "$1" == '-m' ]]; then
     printf 'fixture full build\n'
     [[ ! -f build-status ]] || exit "$(cat build-status)"
 elif [[ "$1" == '-u' ]]; then
-    [[ "$PWD" == */repo && -z "${LIQ_STAGE+x}" ]]
+    [[ "$PWD" == */repo ]]
     printf '%s\n' "$@" > test-arguments
     vendor=$(cat expected-vendor)
     [[ "${ASCEND_CUSTOM_OPP_PATH}" == "$vendor"* ]]

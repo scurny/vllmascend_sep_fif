@@ -25,9 +25,6 @@ using namespace LIQKernel;
         templateClass<LIQType<__VA_ARGS__>> op;                                                              \
         GET_TILING_DATA_WITH_STRUCT(LIQTilingData, tiling_data_in, tiling);                                  \
         const LIQTilingData *__restrict tiling_data = &tiling_data_in;                                       \
-        if (tiling_data->emaThreshold == LIQCommon::LIQ_DEBUG_STAGE_ENTRY_ONLY) {                            \
-            return;                                                                                          \
-        }                                                                                                    \
         op.Init(query, key, weights, queryScale, keyScale, actualSeqLengthsQ, actualSeqLengthsK, blocktable, \
                 sparseIndices, user, tiling_data, &tPipe,                                                    \
                 tokenGvaTable, prefetchStagingBuf, prefetchSlotCounter, tokenToPrefetchSlot);                \

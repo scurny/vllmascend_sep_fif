@@ -101,6 +101,12 @@ def run_correctness_cases(pools: SourcePools) -> None:
     slot_map = torch.full(expected_hits.shape, -1, dtype=torch.int32, device="npu")
     counter = torch.zeros(1, dtype=torch.int32, device="npu")
     staging = torch.full((4096, entry_bytes), 0xA5, dtype=torch.uint8, device="npu")
+    for ema_threshold in (-1.0, -2.0, -3.0, 0.0):
+        launch(ema_threshold=ema_threshold)
+        launch(staging, slot_map, counter, ema_threshold=ema_threshold)
+        assert torch.all(slot_map == -1).item()
+        assert torch.all(staging == 0xA5).item()
+        assert torch.all(counter == 0).item()
     launch(staging, slot_map, counter, ema_threshold=1e30)
     assert torch.all(slot_map == -1).item()
     assert torch.all(staging == 0xA5).item()

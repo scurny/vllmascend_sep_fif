@@ -1,6 +1,4 @@
 import argparse
-import os
-import sys
 
 import torch
 import torch_npu
@@ -56,16 +54,6 @@ def check_out(tag, out):
     print(tag, "sample:", out.flatten()[:16].cpu().tolist())
     print(tag, "min/max:", out.min().item(), out.max().item())  # 索引应在 [-1, asl_k) 内
 
-
-# ---------------- 崩溃二分: LIQ_STAGE=1/2/3 时只跑对应阶段 gate (ema_threshold 传负值) ----------------
-_stage = os.environ.get("LIQ_STAGE")
-if _stage:
-    _s = float(_stage)
-    print(f"=== STAGE {_s:g}: kernel gate ema_threshold={-_s:g} ===")
-    _out = run_op(ema_threshold=-_s)
-    torch.npu.synchronize()
-    print(f"=== STAGE {_s:g} OK (无 aicore 错误) ===")
-    sys.exit(0)
 
 # ---------------- Test 1: 不带 prefetch ----------------
 print("=== Test 1: 不带 prefetch ===")

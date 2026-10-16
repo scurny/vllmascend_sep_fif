@@ -24,12 +24,6 @@ enum class LI_LAYOUT : uint32_t {
     PA_BSND = 2
 };
 
-// ---- 崩溃二分用的阶段开关: 测试侧把 ema_threshold 传成下列负值, kernel 在对应阶段提前退出。
-// 仅用于 950 bring-up 调试, 定位完成后移除。 ----
-constexpr float LIQ_DEBUG_STAGE_ENTRY_ONLY = -1.0f;  // 仅入口 + tiling 解析
-constexpr float LIQ_DEBUG_STAGE_AFTER_INIT = -2.0f;  // + Init (InitBuffers/SplitCore/标量GM读)
-constexpr float LIQ_DEBUG_STAGE_AFTER_MAIN = -3.0f;  // + ProcessMain (AIC matmul / AIV Vec0/Vec1)
-
 template <typename Q_T, typename K_T, typename OUT_T, const bool PAGE_ATTENTION = false,
           LI_LAYOUT Q_LAYOUT_T = LI_LAYOUT::BSND, LI_LAYOUT K_LAYOUT_T = LI_LAYOUT::PA_BSND, typename... Args>
 struct LIQType {

@@ -5,7 +5,7 @@ usage() {
     cat <<'HELP'
 Usage: bash tools/run_liq_test.sh [options]
 
-Run test_liq.py T1-T8 in an activated vLLM-Ascend/CANN environment.
+Run test_liq.py correctness and buffer-contract checks in an activated vLLM-Ascend/CANN environment.
 By default the test uses HBM K/V pools. Use --ddr to exercise registered
 memfabric DDR pools; DDR setup failures are reported instead of falling back.
 
@@ -98,9 +98,6 @@ cd -- "$repo_dir"
 if [[ -n "$device" ]]; then
     export ASCEND_RT_VISIBLE_DEVICES="$device"
 fi
-# LIQ_STAGE exits after a debug gate; this runner always executes the full suite.
-unset LIQ_STAGE
-
 run_logged npu-info npu-smi info
 run_logged preflight "$python_bin" - <<'PY'
 import torch
@@ -159,4 +156,4 @@ else
     printf '[LIQ] Testing HBM GVA copies.\n'
 fi
 run_logged test "${test_command[@]}"
-printf '[LIQ] T1-T8 completed successfully.\n'
+printf '[LIQ] Correctness suite completed successfully.\n'
