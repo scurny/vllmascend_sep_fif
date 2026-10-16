@@ -32,6 +32,20 @@ at::Tensor npu_lightning_indexer_quant(
     const c10::optional<at::Tensor> &token_to_prefetch_slot,
     double ema_threshold, int64_t token_size_bytes_k)
 {
+    auto check_prefetch_tensor = [&](const c10::optional<at::Tensor> &tensor,
+                                     const char *name, bool writable) {
+        if (!tensor.has_value()) {
+            return;
+        }
+        TORCH_CHECK(tensor->defined(), name, " must be a defined tensor");
+        TORCH_CHECK(tensor->device() == query.device(), name, " must be on the same device as query");
+        TORCH_CHECK(!writable || tensor->is_contiguous(), name, " must be contiguous");
+    };
+    check_prefetch_tensor(token_gva_table, "token_gva_table", false);
+    check_prefetch_tensor(prefetch_staging_buf, "prefetch_staging_buf", true);
+    check_prefetch_tensor(prefetch_slot_counter, "prefetch_slot_counter", false);
+    check_prefetch_tensor(token_to_prefetch_slot, "token_to_prefetch_slot", true);
+
     fprintf(stderr, "[LIQ_ADPT] enter npu_lightning_indexer_quant (adpt built %s %s)\n", __DATE__, __TIME__);
     fflush(stderr);
     std::string query_layout_str = std::string(layout_query);

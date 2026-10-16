@@ -3705,9 +3705,9 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
         "                            str layout_query='BSND', str layout_key='BSND',"
         "                            int sparse_count=2048, int sparse_mode=3, "
         "                            Tensor? token_gva_table=None, "
-        "                            Tensor? prefetch_staging_buf=None, "
+        "                            Tensor(a!)? prefetch_staging_buf=None, "
         "                            Tensor? prefetch_slot_counter=None, "
-        "                            Tensor? token_to_prefetch_slot=None, "
+        "                            Tensor(b!)? token_to_prefetch_slot=None, "
         "                            float ema_threshold=0.0, "
         "                            int token_size_bytes_k=0) -> Tensor"
     );

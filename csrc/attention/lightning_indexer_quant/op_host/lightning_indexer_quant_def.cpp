@@ -71,8 +71,7 @@ public:
         this->Input("prefetch_staging_buf")
         .ParamType(OPTIONAL)
         .DataType({ge::DT_UINT8})
-        .FormatList({ge::FORMAT_ND})
-        .AutoContiguous();
+        .FormatList({ge::FORMAT_ND});
         this->Input("prefetch_slot_counter")
         .ParamType(OPTIONAL)
         .DataType({ge::DT_INT32})
@@ -81,8 +80,7 @@ public:
         this->Input("token_to_prefetch_slot")
         .ParamType(OPTIONAL)
         .DataType({ge::DT_INT32})
-        .FormatList({ge::FORMAT_ND})
-        .AutoContiguous();
+        .FormatList({ge::FORMAT_ND});
         this->Output ("sparse_indices").ParamType (REQUIRED).DataType ({ge::DT_INT32}).FormatList ({ge::FORMAT_ND});
         this->Attr("query_quant_mode").AttrType(REQUIRED).Int(0);  // 0: 默认值，per-token-head
         this->Attr("key_quant_mode").AttrType(REQUIRED).Int(0);    // 0: 默认值，per-token-head
@@ -155,8 +153,7 @@ public:
         aicore_config_95.Input("prefetch_staging_buf")
         .ParamType(OPTIONAL)
         .DataType({ge::DT_UINT8,ge::DT_UINT8,ge::DT_UINT8,ge::DT_UINT8,ge::DT_UINT8})
-        .FormatList({ge::FORMAT_ND})
-        .AutoContiguous();
+        .FormatList({ge::FORMAT_ND});
         aicore_config_95.Input("prefetch_slot_counter")
         .ParamType(OPTIONAL)
         .DataType({ge::DT_INT32,ge::DT_INT32,ge::DT_INT32,ge::DT_INT32,ge::DT_INT32})
@@ -165,8 +162,7 @@ public:
         aicore_config_95.Input("token_to_prefetch_slot")
         .ParamType(OPTIONAL)
         .DataType({ge::DT_INT32,ge::DT_INT32,ge::DT_INT32,ge::DT_INT32,ge::DT_INT32})
-        .FormatList({ge::FORMAT_ND})
-        .AutoContiguous();
+        .FormatList({ge::FORMAT_ND});
         aicore_config_95.Output("sparse_indices")
         .ParamType(REQUIRED)
         .DataType({ge::DT_INT32,ge::DT_INT32,ge::DT_INT32,ge::DT_INT32,ge::DT_INT32})
