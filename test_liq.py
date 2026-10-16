@@ -1,3 +1,5 @@
+import os
+
 import torch
 import torch_npu
 
@@ -11,10 +13,12 @@ from vllm_ascend import vllm_ascend_C  # noqa: F401  注册 torch.ops
 torch.manual_seed(0)
 
 # ---------------- 公共输入 (贴近生产: 有效 KV 长度 > topk) ----------------
+# 形状可用环境变量缩小, 用于排查"崩点是否与计算规模相关" (如 LIQ_TOPK=64 LIQ_ASL=128 LIQ_BLOCKNUM=2)
 B, S1, N1, D = 1, 1, 64, 128
-block_num, block_size = 100, 128
-asl_k = 4096            # 有效 KV token 数, 须 <= block_num*block_size=12800 且 > topk
-topk = 2048
+block_num = int(os.environ.get("LIQ_BLOCKNUM", 100))
+block_size = 128
+asl_k = int(os.environ.get("LIQ_ASL", 4096))   # 有效 KV token 数, 须 <= block_num*block_size 且 > topk
+topk = int(os.environ.get("LIQ_TOPK", 2048))
 
 query = torch.randint(-128, 127, (B * S1, N1, D), dtype=torch.int8, device='npu')
 key = torch.randint(-128, 127, (block_num, block_size, 1, D), dtype=torch.int8, device='npu')
