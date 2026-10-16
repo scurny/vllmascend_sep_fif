@@ -1,5 +1,11 @@
 import torch
 import torch_npu
+
+from vllm_ascend.utils import bootstrap_custom_op_env
+
+# 裸导入不走 vLLM 引擎初始化, 必须手动把 vllm_ascend/_cann_ops_custom
+# 前置到 ASCEND_CUSTOM_OPP_PATH, 否则会加载环境变量里残留的旧算子包
+bootstrap_custom_op_env()
 from vllm_ascend import vllm_ascend_C  # noqa: F401  注册 torch.ops
 
 torch.manual_seed(0)
