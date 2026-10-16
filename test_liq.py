@@ -1,7 +1,17 @@
+import argparse
+import os
+import sys
+
 import torch
 import torch_npu
+
+from tools.liq_test_correctness import run_correctness_cases
+from tools.liq_test_memory import make_source_pools
 from vllm_ascend import vllm_ascend_C  # noqa: F401  注册 torch.ops
 
+parser = argparse.ArgumentParser(description="LIQ TopK and KV prefetch correctness tests")
+parser.add_argument("--ddr", action="store_true", help="Use registered memfabric DDR K/V source pools")
+args = parser.parse_args()
 torch.manual_seed(0)
 PREFETCH_HIT_THRESHOLD = 1 / 32  # Single-dimension score: 64 heads * 2^-10 = 1/16.
 
@@ -45,9 +55,6 @@ def check_out(tag, out):
 
 
 # ---------------- 崩溃二分: LIQ_STAGE=1/2/3 时只跑对应阶段 gate (ema_threshold 传负值) ----------------
-import os
-import sys
-
 _stage = os.environ.get("LIQ_STAGE")
 if _stage:
     _s = float(_stage)
@@ -72,13 +79,10 @@ k_entry_bytes = 384
 prefetch_candidate_max = topk * 2
 kSeqSize = block_num * block_size
 
-k_pool = torch.randint(0, 256, (kSeqSize, token_size_bytes_k), dtype=torch.uint8, device='npu')
-v_pool = torch.randint(0, 256, (kSeqSize, k_entry_bytes - token_size_bytes_k), dtype=torch.uint8, device='npu')
-ar = torch.arange(kSeqSize)
-gva = torch.empty((B, kSeqSize, 2), dtype=torch.int64)
-gva[:, :, 0] = k_pool.data_ptr() + ar * token_size_bytes_k
-gva[:, :, 1] = v_pool.data_ptr() + ar * (k_entry_bytes - token_size_bytes_k)
-token_gva_table = gva.to('npu')
+pools = make_source_pools(kSeqSize, token_size_bytes_k, k_entry_bytes - token_size_bytes_k, ddr=args.ddr)
+k_pool, v_pool = pools.k, pools.v
+print(f"[LIQ] K/V source: {'registered DDR (DVA)' if args.ddr else 'HBM'}")
+token_gva_table = pools.gva(torch.arange(kSeqSize).view(B, -1)).to('npu')
 
 
 def make_prefetch_tensors():
@@ -237,3 +241,6 @@ hit_slots = extra_rows_map[0].cpu()[hit_tokens].long()
 assert torch.equal(staging.cpu()[hit_slots, :token_size_bytes_k], k_pool.cpu()[hit_tokens])
 assert torch.equal(staging.cpu()[hit_slots, token_size_bytes_k:], v_pool.cpu()[hit_tokens])
 print("=== Test 6 PASS ===")
+
+run_correctness_cases(pools)
+torch.npu.synchronize()

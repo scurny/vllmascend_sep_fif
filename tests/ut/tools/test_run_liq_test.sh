@@ -31,6 +31,7 @@ if [[ "$1" == '-m' ]]; then
     [[ ! -f build-status ]] || exit "$(cat build-status)"
 elif [[ "$1" == '-u' ]]; then
     [[ "$PWD" == */repo && -z "${LIQ_STAGE+x}" ]]
+    printf '%s\n' "$@" > test-arguments
     vendor=$(cat expected-vendor)
     [[ "${ASCEND_CUSTOM_OPP_PATH}" == "$vendor"* ]]
     [[ "${LD_LIBRARY_PATH}" == "$vendor/op_api/lib"* ]]
@@ -93,6 +94,9 @@ rg -q 'fixture test stderr' "$scratch/test log/test.log"
 [[ ! -f "$scratch/repo/pip-called" ]]
 printf '3\n' > "$scratch/repo/expected-device"
 check_status 0 bash "$runner" --device 3 --log-dir "$scratch/device"
+! rg -qx -- '--ddr' "$scratch/repo/test-arguments"
+check_status 0 bash "$runner" --ddr --log-dir "$scratch/ddr"
+rg -qx -- '--ddr' "$scratch/repo/test-arguments"
 printf '2\n' > "$scratch/repo/expected-device"
 check_status 0 env ASCEND_RT_VISIBLE_DEVICES=2 bash "$runner" --log-dir "$scratch/existing-device"
 : > "$scratch/repo/expected-device"
@@ -138,6 +142,10 @@ check_status 17 bash "$runner" --build --log-dir "$scratch/full-build-fail"
 printf '139\n' > "$scratch/repo/test-status"
 check_status 139 bash "$runner" --log-dir "$scratch/test-fail"
 rg -q 'fixture test stderr' "$scratch/test-fail/test.log"
+rm "$scratch/repo/test-status"
+printf '139\n' > "$scratch/repo/test-status"
+check_status 139 bash "$runner" --ddr --log-dir "$scratch/ddr-test-fail"
+rg -q 'fixture test stderr' "$scratch/ddr-test-fail/test.log"
 rm "$scratch/repo/test-status"
 mv "$full_vendor" "$scratch/vendor-hidden"
 check_status 2 bash "$runner" --log-dir "$scratch/no-vendor"

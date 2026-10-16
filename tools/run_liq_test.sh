@@ -5,8 +5,9 @@ usage() {
     cat <<'HELP'
 Usage: bash tools/run_liq_test.sh [options]
 
-Run test_liq.py T1-T6 in an activated vLLM-Ascend/CANN environment.
-The test uses HBM K/V pools; it does not validate registered DDR pools.
+Run test_liq.py T1-T8 in an activated vLLM-Ascend/CANN environment.
+By default the test uses HBM K/V pools. Use --ddr to exercise registered
+memfabric DDR pools; DDR setup failures are reported instead of falling back.
 
 Options:
   --build           Rebuild/install custom ops and the torch extension first.
@@ -16,6 +17,8 @@ Options:
                     and load that package for this run only. Exclusive with --build.
   --device ID       Select one physical NPU via ASCEND_RT_VISIBLE_DEVICES.
                     Otherwise preserve the current device visibility.
+  --ddr             Use registered memfabric DDR K/V pools for the prefetch tests.
+                    Requires the DDR offload runtime on the target host.
   --python PATH     Python interpreter (default: python).
   --log-dir DIR     Log directory (default: a new directory under /tmp).
   -h, --help        Show this help.
@@ -35,6 +38,7 @@ fail() {
 repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 build=0
 build_op=0
+ddr=0
 python_bin=python
 device=''
 log_dir=''
@@ -42,6 +46,7 @@ while (($#)); do
     case "$1" in
         --build) build=1; shift ;;
         --build-op) build_op=1; shift ;;
+        --ddr) ddr=1; shift ;;
         --device|--python|--log-dir)
             (($# >= 2)) && [[ -n "$2" ]] || fail "$1 requires a value"
             case "$1" in
@@ -146,6 +151,12 @@ if extension.parent != (Path.cwd() / "vllm_ascend").resolve():
     raise SystemExit("Loaded an extension outside this checkout; --build-op requires an existing checkout extension, use --build to install it")
 PY
 
-printf '[LIQ] Testing HBM GVA copies; registered DDR pools require separate validation.\n'
-run_logged test "$python_bin" -u -X faulthandler "$repo_dir/test_liq.py"
-printf '[LIQ] T1-T6 completed successfully.\n'
+test_command=("$python_bin" -u -X faulthandler "$repo_dir/test_liq.py")
+if ((ddr)); then
+    printf '[LIQ] Testing registered DDR GVA copies.\n'
+    test_command+=(--ddr)
+else
+    printf '[LIQ] Testing HBM GVA copies.\n'
+fi
+run_logged test "${test_command[@]}"
+printf '[LIQ] T1-T8 completed successfully.\n'
