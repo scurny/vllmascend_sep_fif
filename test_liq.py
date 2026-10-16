@@ -3,6 +3,7 @@ import torch_npu
 from vllm_ascend import vllm_ascend_C  # noqa: F401  注册 torch.ops
 
 torch.manual_seed(0)
+PREFETCH_HIT_THRESHOLD = 1 / 32  # Single-dimension score: 64 heads * 2^-10 = 1/16.
 
 # ---------------- 公共输入 (贴近生产: 有效 KV 长度 > topk) ----------------
 B, S1, N1, D = 1, 1, 64, 128
@@ -109,7 +110,7 @@ print("=== Test 2b: 真实 prefetch ===")
 staging, counter, slot_map = make_prefetch_tensors()
 out2b = run_op(token_gva_table=token_gva_table, prefetch_staging_buf=staging,
                prefetch_slot_counter=counter, token_to_prefetch_slot=slot_map,
-               ema_threshold=1.0, token_size_bytes_k=token_size_bytes_k)
+               ema_threshold=PREFETCH_HIT_THRESHOLD, token_size_bytes_k=token_size_bytes_k)
 check_out("[T2b]", out2b)
 used = int((slot_map[0] != -1).sum().item())
 print("[T2b] used slots:", used)
@@ -128,14 +129,14 @@ for invalid_k_bytes in (-1, 1, k_entry_bytes, k_entry_bytes + 1, 512, (1 << 32) 
     try:
         run_op(token_gva_table=token_gva_table, prefetch_staging_buf=staging,
                prefetch_slot_counter=counter, token_to_prefetch_slot=slot_map,
-               ema_threshold=1.0, token_size_bytes_k=invalid_k_bytes)
+               ema_threshold=PREFETCH_HIT_THRESHOLD, token_size_bytes_k=invalid_k_bytes)
     except RuntimeError:
         rejected = True
     assert rejected, f"invalid token_size_bytes_k accepted: {invalid_k_bytes}"
 torch.npu.synchronize()
 staging, counter, slot_map = make_prefetch_tensors()
 out3 = run_op(token_gva_table=token_gva_table, prefetch_staging_buf=staging,
-              prefetch_slot_counter=counter, token_to_prefetch_slot=slot_map, ema_threshold=1.0)
+              prefetch_slot_counter=counter, token_to_prefetch_slot=slot_map, ema_threshold=PREFETCH_HIT_THRESHOLD)
 check_out("[T3 default K]", out3)
 assert torch.equal((slot_map[0].cpu() >= 0).nonzero().flatten(), hit_tokens)
 default_slots = slot_map[0].cpu()[hit_tokens].long()
@@ -162,7 +163,7 @@ for iteration in range(8):
     slot_map.fill_(-1)
     out4 = run_op(token_gva_table=token_gva_table, prefetch_staging_buf=staging,
                   prefetch_slot_counter=counter, token_to_prefetch_slot=slot_map,
-                  ema_threshold=1.0, token_size_bytes_k=token_size_bytes_k)
+                  ema_threshold=PREFETCH_HIT_THRESHOLD, token_size_bytes_k=token_size_bytes_k)
     check_out(f"[T4 iteration {iteration}]", out4)
     hit_tokens = (slot_map[0].cpu() >= 0).nonzero().flatten()
     assert torch.equal(hit_tokens, expected_tokens)
@@ -184,7 +185,7 @@ for iteration in range(8):
     slot_map.fill_(-1)
     out5 = run_op(token_gva_table=token_gva_table, prefetch_staging_buf=staging,
                   prefetch_slot_counter=counter, token_to_prefetch_slot=slot_map,
-                  ema_threshold=1.0, token_size_bytes_k=token_size_bytes_k)
+                  ema_threshold=PREFETCH_HIT_THRESHOLD, token_size_bytes_k=token_size_bytes_k)
     check_out(f"[T5 iteration {iteration}]", out5)
     hit_tokens = (slot_map[0].cpu() >= 0).nonzero().flatten()
     assert torch.equal(hit_tokens, expected_tokens)
@@ -213,7 +214,7 @@ invalid_tables = [
 for case_name, argument, invalid_tensor in invalid_tables:
     inputs = dict(token_gva_table=token_gva_table, prefetch_staging_buf=staging,
                   prefetch_slot_counter=counter, token_to_prefetch_slot=slot_map,
-                  ema_threshold=1.0, token_size_bytes_k=token_size_bytes_k)
+                  ema_threshold=PREFETCH_HIT_THRESHOLD, token_size_bytes_k=token_size_bytes_k)
     inputs[argument] = invalid_tensor
     rejected = False
     try:
@@ -227,7 +228,7 @@ extra_rows_gva = token_gva_table.repeat(2, 1, 1)
 extra_rows_map = torch.full((2 * B, kSeqSize), -1, dtype=torch.int32, device='npu')
 out6 = run_op(token_gva_table=extra_rows_gva, prefetch_staging_buf=staging,
               prefetch_slot_counter=counter, token_to_prefetch_slot=extra_rows_map,
-              ema_threshold=1.0, token_size_bytes_k=token_size_bytes_k)
+              ema_threshold=PREFETCH_HIT_THRESHOLD, token_size_bytes_k=token_size_bytes_k)
 check_out("[T6 extra rows]", out6)
 hit_tokens = (extra_rows_map[0].cpu() >= 0).nonzero().flatten()
 assert torch.equal(hit_tokens, expected_tokens)
