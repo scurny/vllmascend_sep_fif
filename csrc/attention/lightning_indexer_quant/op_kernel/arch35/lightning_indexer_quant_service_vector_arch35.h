@@ -370,7 +370,7 @@ __aicore__ inline void LIQVector<LIQT>::PrefetchScoresInVec1(
         // 1. 从 tokenGvaTable 读取 K/V 两个 GVA 地址 (layout: [num_reqs, max_tokens, 2])
         uint64_t gvaK = tokenGvaTableGm_.GetValue(static_cast<uint64_t>(globalPos) * 2);
         uint64_t gvaV = tokenGvaTableGm_.GetValue(static_cast<uint64_t>(globalPos) * 2 + 1);
-        
+
         // 3. GVA→UB: 先 K 再 V
         GlobalTensor<uint8_t> srcGmK;
         srcGmK.SetGlobalBuffer(reinterpret_cast<__gm__ uint8_t *>(gvaK));
@@ -380,7 +380,7 @@ __aicore__ inline void LIQVector<LIQT>::PrefetchScoresInVec1(
         srcGmV.SetGlobalBuffer(reinterpret_cast<__gm__ uint8_t *>(gvaV));
         AscendC::DataCopyPad(prefetchUbLocal_[tokenSizeBytesK_], srcGmV, copyParamsV, padParams);
         SetWaitFlag<HardEvent::MTE2_MTE3>(HardEvent::MTE2_MTE3);
-        
+
         // 4. UB→Staging Buffer
         AscendC::DataCopyPad(
         prefetchStagingBufGm_[static_cast<uint64_t>(slot) * static_cast<uint64_t>(kEntryBytes_)],
@@ -394,8 +394,8 @@ __aicore__ inline void LIQVector<LIQT>::PrefetchScoresInVec1(
         int64_t globalPos = reqTokenBase + cuBaseS2Idx + static_cast<int64_t>(bitPositions[k]);
         int32_t slot = slotStart + static_cast<int32_t>(k);
 #if (__CCE_AICORE__ == 310)
-        auto *slotMap = reinterpret_cast<__gm__ uint32_t *>(tokenToPrefetchSlotGm_.GetPhyAddr());
-        (void)AscendC::AtomicExch(slotMap + globalPos, static_cast<uint32_t>(slot));
+        auto *slotMap = reinterpret_cast<__gm__ uint32_t *>(tokenToPrefetchSlotGm_.GetPhyAddr(globalPos));
+        (void)AscendC::AtomicExch(slotMap, static_cast<uint32_t>(slot));
 #else
         tokenToPrefetchSlotGm_.SetValue(static_cast<uint64_t>(globalPos), slot);
 #endif
