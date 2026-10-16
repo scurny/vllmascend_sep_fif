@@ -7,6 +7,7 @@ import torch_npu
 
 from tools.liq_test_correctness import run_correctness_cases
 from tools.liq_test_memory import make_source_pools
+from tools.liq_test_workspace import run_workspace_cases
 from vllm_ascend import vllm_ascend_C  # noqa: F401  注册 torch.ops
 
 parser = argparse.ArgumentParser(description="LIQ TopK and KV prefetch correctness tests")
@@ -243,4 +244,5 @@ assert torch.equal(staging.cpu()[hit_slots, token_size_bytes_k:], v_pool.cpu()[h
 print("=== Test 6 PASS ===")
 
 run_correctness_cases(pools)
+run_workspace_cases()
 torch.npu.synchronize()

@@ -735,16 +735,15 @@ typedef void (*ReleaseHugeMem)(void *, bool);
     auto workspace_status = call(getWorkspaceSizeFunc, converted_params);     \
     TORCH_CHECK(workspace_status == 0,                                        \
                 "call " #aclnn_api " failed, detail:", aclGetRecentErrMsg()); \
-    void *workspace_addr = nullptr;                                           \
-    if (workspace_size != 0) {                                                \
-      at::TensorOptions options =                                             \
-          at::TensorOptions(torch_npu::utils::get_npu_device_type());         \
-      auto workspace_tensor =                                                 \
-          at::empty({workspace_size}, options.dtype(kByte));                  \
-      workspace_addr = const_cast<void *>(workspace_tensor.storage().data()); \
-    }                                                                         \
-    auto acl_call = [converted_params, workspace_addr, workspace_size,        \
+    auto acl_call = [converted_params, workspace_size,                        \
                      acl_stream, executor]() -> int {                         \
+      at::Tensor workspace_tensor;                                            \
+      void *workspace_addr = nullptr;                                         \
+      if (workspace_size != 0) {                                              \
+        workspace_tensor = at_npu::native::OpPreparation::                    \
+            unsafe_empty_workspace(workspace_size, acl_stream);              \
+        workspace_addr = const_cast<void *>(workspace_tensor.storage().data()); \
+      }                                                                       \
       typedef int (*OpApiFunc)(void *, uint64_t, aclOpExecutor *,             \
                                const aclrtStream);                            \
       OpApiFunc opApiFunc = reinterpret_cast<OpApiFunc>(opApiFuncAddr);       \
