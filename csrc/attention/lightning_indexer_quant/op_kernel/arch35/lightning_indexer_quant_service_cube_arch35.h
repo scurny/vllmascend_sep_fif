@@ -566,8 +566,15 @@ __aicore__ inline void LIQMatmul<LIQT>::FixpResToGm(uint64_t s1L0RealCount, uint
     intriParams.quantPre = QuantMode_t::NoQuant;
     intriParams.nz2ndEn = true;
     intriParams.reluPre = 0;
-    AscendC::SetFixpipeNz2ndFlag(s1L0RealCount, CeilDiv(constInfo_.gSize, BLOCK_CUBE) * S2_BASIC_BLOCK_L0 / BLOCK_CUBE,
-                                 2048);
+#if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
+    // 950 uses FP32 C0 units (64 B); earlier architectures use 1024 B fractals.
+    const uint16_t srcNdStride = constInfo_.gSize * S2_BASIC_BLOCK_L0 / BLOCK_CUBE;
+    const uint32_t dstNdStride = constInfo_.s2BaseSize;
+#else
+    const uint16_t srcNdStride = CeilDiv(constInfo_.gSize, BLOCK_CUBE) * S2_BASIC_BLOCK_L0 / BLOCK_CUBE;
+    const uint16_t dstNdStride = constInfo_.s2BaseSize;
+#endif
+    AscendC::SetFixpipeNz2ndFlag(static_cast<uint16_t>(s1L0RealCount), srcNdStride, dstNdStride);
     AscendC::DataCopy(mm1ResGm_[(runInfo.loop % 2) * constInfo_.mBaseSize / constInfo_.gSize * constInfo_.s2BaseSize +
                                 s1GmOffset * intriParams.dstStride + s2GmOffset],
                       cL0_.template ReinterpretCast<float>()[(l0cBufIdx_ % DOUBLE_BUF_NUM) * L0C_BUFFER_OFFSET],
