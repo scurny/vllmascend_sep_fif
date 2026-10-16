@@ -16,6 +16,7 @@
 #ifndef LIGHTING_INDEXER_QUANT_VLLM_TORCH_ADPT_H
 #define LIGHTING_INDEXER_QUANT_VLLM_TORCH_ADPT_H
 #include <cstdio>
+#include <cstdlib>
 namespace vllm_ascend {
 
 at::Tensor npu_lightning_indexer_quant(
@@ -60,8 +61,9 @@ at::Tensor npu_lightning_indexer_quant(
         output_size = {query.size(DIM_0), keyHeadNum, sparse_count};
     }
     at::Tensor lightning_indexer_quant_output = at::empty(output_size, query.options().dtype(at::kInt));
-    if (ema_threshold < 0.0) {
-        // 调试阶段模式(LIQ_STAGE): 预填哨兵值, 用于判读 kernel 是否真的执行了入口调试写入
+    if (ema_threshold < 0.0 || std::getenv("LIQ_FILL") != nullptr) {
+        // 调试: 预填哨兵值, 用于判读 kernel 到底覆盖了输出张量的哪些单元.
+        // LIQ_STAGE 模式(ema<0)必填; 正常路径设 LIQ_FILL=1 启用 (定位输出写入问题, 完事后移除)
         lightning_indexer_quant_output.fill_(0x7E7E7E7E);
     }
 

@@ -56,6 +56,13 @@ def check_out(tag, out):
     print(tag, "shape:", tuple(out.shape), "dtype:", out.dtype)
     print(tag, "sample:", out.flatten()[:16].cpu().tolist())
     print(tag, "min/max:", out.min().item(), out.max().item())  # 索引应在 [-1, asl_k) 内
+    if os.environ.get("LIQ_FILL"):
+        of = out.flatten().cpu()
+        n_sent = int((of == 0x7E7E7E7E).sum())
+        non_sent = of[of != 0x7E7E7E7E]
+        n_valid = int(((non_sent >= 0) & (non_sent < asl_k)).sum()) if non_sent.numel() else 0
+        print(tag, f"[FILL] kernel 覆盖 {of.numel() - n_sent}/{of.numel()} 单元, "
+                   f"非哨兵中合法索引数 {n_valid}; 非哨兵前12: {non_sent[:12].tolist()}")
 
 
 # ---------------- 金标准参考 (与 kernel arch35 精度模型逐位对齐) ----------------
@@ -248,7 +255,9 @@ else:
         v_ok = torch.equal(staging[slot, token_size_bytes_k:].cpu(), v_pool[tok].cpu())
         if not (k_ok and v_ok):
             bad += 1
-            print(f"[T2b] token {tok} -> slot {slot}: K bytes match={k_ok}, V bytes match={v_ok}")
+            row = staging[slot].cpu()
+            print(f"[T2b] token {tok} -> slot {slot}: K={k_ok} V={v_ok}, staging全零={bool((row == 0).all())}, "
+                  f"staging前8B={row[:8].tolist()}, 期望前8B={k_pool[tok][:8].cpu().tolist()}")
     if bad:
         FAILURES.append(f"[T2b] {bad} 个 slot 搬运内容与源不符")
 print(f"=== Test 2b {'FAIL' if len(FAILURES) > _n else 'PASS'} ===")
