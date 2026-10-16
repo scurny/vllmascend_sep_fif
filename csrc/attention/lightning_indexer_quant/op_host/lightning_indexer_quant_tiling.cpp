@@ -854,17 +854,19 @@ ge::graphStatus LightningIndexerQuantTiling::DoTiling(LIQTilingInfo *tilingInfo)
     if (tilingInfo->emaThreshold < 0.0f) {
         tilingData_.set_sparseMode(0x5AA5A55AU);
     }
-    auto liqSaveRet = tilingData_.SaveToBuffer(context_->GetRawTilingData()->GetData(),
-                                               context_->GetRawTilingData()->GetCapacity());
+    tilingData_.SaveToBuffer(context_->GetRawTilingData()->GetData(),
+                             context_->GetRawTilingData()->GetCapacity());
     context_->GetRawTilingData()->SetDataSize(tilingData_.GetDataSize());
     union {
         float f;
         uint32_t u;
     } liqDbgEmaHost;
     liqDbgEmaHost.f = tilingInfo->emaThreshold;
-    printf("[LIQ_TILING] TilingBuf: capacity=%lu structSize=%lu saveRet=%d emaBits=0x%08X\n",
+    // capacity < sizeof 即 tiling buffer 装不下新字段 -> emaThreshold 会被静默截断
+    printf("[LIQ_TILING] TilingBuf: capacity=%lu dataSize=%lu sizeof(LIQTilingData)=%lu emaBits=0x%08X\n",
            (unsigned long)context_->GetRawTilingData()->GetCapacity(),
-           (unsigned long)tilingData_.GetDataSize(), (int)liqSaveRet, liqDbgEmaHost.u);
+           (unsigned long)tilingData_.GetDataSize(),
+           (unsigned long)sizeof(LIQTilingData), liqDbgEmaHost.u);
     fflush(stdout);
 
     // -------------set tilingkey-----------------
