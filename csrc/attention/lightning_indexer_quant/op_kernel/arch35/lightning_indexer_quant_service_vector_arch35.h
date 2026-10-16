@@ -513,6 +513,20 @@ __aicore__ inline void LIQVector<LIQT>::ProcessVec1(const LIQCommon::RunInfo &in
             GetKeyScale(info, kScaleTUb, info.bIdx, cuBaseS2Idx, cuS2Len);
             inQueue_.EnQue<float>(mmInUb);
             mmInUb = inQueue_.DeQue<float>();
+            if (constInfo_.emaThreshold == LIQCommon::LIQ_DEBUG_DUMP_MM1) {
+                // 调试(-20): 把读入的 mm1Res 原始位型 (2048 float, 乘 kScale 之前) 直接写入
+                // 输出张量, host 侧按 128-token tile 解码与金标准 C_ws 比对, 定位 cube 落盘丢失.
+                // 注意: 多核(多 S2 块)时各核 dump 会重叠, 本模式仅用于单块形状.
+                LocalTensor<int32_t> dumpUb = outQueue_.AllocTensor<int32_t>();
+                DataCopy(dumpUb, mmInUb.template ReinterpretCast<int32_t>(), cuS2LenVecAlign);
+                PipeBarrier<PIPE_V>();
+                inQueue_.FreeTensor(mmInUb);
+                outQueue_.EnQue<int32_t>(dumpUb);
+                dumpUb = outQueue_.DeQue<int32_t>();
+                LIQServiceVec::CopyOut(indiceOutGm[info.indiceOutOffset], dumpUb, cuS2LenVecAlign);
+                outQueue_.FreeTensor(dumpUb);
+                return;
+            }
             AscendC::Cast(kScaleUb, kScaleTUb, RoundMode::CAST_NONE, cuS2Len);
             PipeBarrier<PIPE_V>();
             AscendC::Mul(mmInUb, mmInUb, kScaleUb, cuS2Len);

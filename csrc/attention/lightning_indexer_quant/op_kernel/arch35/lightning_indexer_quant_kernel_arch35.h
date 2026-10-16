@@ -600,9 +600,9 @@ __aicore__ inline void LIQPreload<LIQT>::Process()
 {
     const float emaDbg = constInfo.emaThreshold;
     if (emaDbg < 0.0f && emaDbg != LIQCommon::LIQ_DEBUG_STAGE_AFTER_MAIN &&
-        emaDbg != LIQCommon::LIQ_DEBUG_MAIN_FULL) {
+        emaDbg != LIQCommon::LIQ_DEBUG_MAIN_FULL && emaDbg != LIQCommon::LIQ_DEBUG_DUMP_MM1) {
         return;  // 调试门: 所有 pre-ProcessMain 阶段值(-1/-2/-11..-14)在此合法退出;
-                  // -3/-15 需要跑完 ProcessMain, 不在此退出.
+                  // -3/-15 需要跑完 ProcessMain, 不在此退出; -20 需要完整流水, 不在此退出.
                   // NOTE: Init 之前 return 会让 AIV 从核等协议挂死, 详见 lightning_indexer_quant.cpp 注释
     }
     if (usedCoreNum == 0) {
@@ -614,8 +614,10 @@ __aicore__ inline void LIQPreload<LIQT>::Process()
     ProcessMain();
 
     if (constInfo.emaThreshold == LIQCommon::LIQ_DEBUG_STAGE_AFTER_MAIN ||
-        constInfo.emaThreshold == LIQCommon::LIQ_DEBUG_MAIN_FULL) {
-        return;  // 调试阶段开关: 验证 ProcessMain 是否安全 (隔离 ProcessDecode/LD)
+        constInfo.emaThreshold == LIQCommon::LIQ_DEBUG_MAIN_FULL ||
+        constInfo.emaThreshold == LIQCommon::LIQ_DEBUG_DUMP_MM1) {
+        return;  // 调试阶段开关: 验证 ProcessMain 是否安全 (隔离 ProcessDecode/LD);
+                 // -20 dump 模式同样止步于 ProcessMain, 防止 Decode 路径覆盖 dump 内容
     }
 
     ProcessDecode();

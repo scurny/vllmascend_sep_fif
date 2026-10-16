@@ -97,7 +97,7 @@ def liq_golden():
     phys = bt[s2 // bs] * bs + (s2 % bs)                       # 逻辑 token -> 物理行 (PA 布局)
     k_tokens = key.view(blk * bs, -1).cpu().float()[phys]      # [S2, D]
     dot = torch.einsum('tgd,sd->tgs', q, k_tokens) / 1024.0    # int8 点积, fp32 精确承载
-    dot = dot.to(torch.float16).float()                        # DEQF16 舍入
+    dot = dot.to(torch.float16).float().clamp(min=0)           # DEQF16 舍入 + reluPre (FixpSToL1 reluPre=1)
     w = (weights.cpu() * query_dequant_scale.cpu()).float()    # fp16 乘法舍入后转 fp32
     score = torch.einsum('tg,tgs->ts', w, dot)                 # fp32 头累加
     ks = key_dequant_scale.view(blk * bs).cpu().float()[phys]  # [S2]
@@ -240,6 +240,44 @@ if _stage:
         except Exception as e2:
             print(f"[LIQ_DEBUG] 输出读取失败(设备异常态): {str(e2)[:120]}")
     sys.exit(0)
+
+# ---------------- mm1Res 落盘诊断: ema=-20, Vec1 把 mm1Res 原始位型写入输出 ----------------
+# 判读: 每个输出单元是 mm1Res 原始 float 位型; 按 128-token tile 与金标准 C_ws 比对
+# (直方图实测: 偶数 tile(>=2) 的 token 从未被选中 -> 疑似 mm1Res 相应区段未被 cube 落盘)
+if os.environ.get("LIQ_DUMP"):
+    build_inputs(0)
+    out = run_op(ema_threshold=-20.0)
+    torch.npu.synchronize()
+    raw = out.flatten().cpu().to(torch.int32)
+    floats = raw.view(torch.float32)
+    q = query.cpu().float()
+    blk, bs = key.shape[0], key.shape[1]
+    bt = block_table[0].cpu().long()
+    s2 = torch.arange(blk * bs)
+    phys = bt[s2 // bs] * bs + (s2 % bs)
+    k_tokens = key.view(blk * bs, -1).cpu().float()[phys]
+    dot = torch.einsum('tgd,sd->tgs', q, k_tokens) / 1024.0
+    dot = dot.to(torch.float16).float().clamp(min=0)
+    w = (weights.cpu() * query_dequant_scale.cpu()).float()
+    cws = torch.einsum('tg,tgs->ts', w, dot)[0]
+    tile = 128
+    ntile = asl_k // tile
+    n_sent = int((raw == 0x7E7E7E7E).sum())
+    print(f"=== LIQ_DUMP: 共 {raw.numel()} 单元, 哨兵(未写入) {n_sent}, "
+          f"前8位型: {[hex(x & 0xFFFFFFFF) for x in raw[:8].tolist()]}")
+    for t in range(ntile):
+        seg_i = raw[t * tile:(t + 1) * tile]
+        seg = floats[t * tile:(t + 1) * tile]
+        ref = cws[t * tile:(t + 1) * tile]
+        if int((seg_i == 0x7E7E7E7E).sum()) == tile:
+            verdict = "未写入(哨兵)"
+        else:
+            diff = float((seg - ref).abs().max())
+            verdict = "OK" if diff <= 0.05 * float(ref.abs().max()) + 2.0 else "BAD"
+        print(f"[DUMP] tile {t:2d} [{t*tile:5d},{(t+1)*tile:5d}): {verdict:12s} "
+              f"kernel前4={seg[:4].tolist()} 金标前4={[round(x,1) for x in ref[:4].tolist()]}")
+    sys.exit(0)
+
 
 # ---------------- Test 1: 不带 prefetch, 多 seed 金标准对拍 ----------------
 for seed in (0, 1, 2):

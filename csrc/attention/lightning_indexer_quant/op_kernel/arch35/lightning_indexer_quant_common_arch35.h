@@ -35,6 +35,9 @@ constexpr float LIQ_DEBUG_INIT_SPLIT = -12.0f;       // + SplitCore 后
 constexpr float LIQ_DEBUG_INIT_BUFBOUND = -13.0f;    // + 全部 SetGlobalBuffer/InitParams 后 (InitBuffers 前)
 constexpr float LIQ_DEBUG_INIT_FULL = -14.0f;        // + InitBuffers (完整 Init, 等价 -1/-2)
 constexpr float LIQ_DEBUG_MAIN_FULL = -15.0f;        // + ProcessMain (等价 -3)
+// 数值调试: 跑完整流水, 但 Vec1 在读入 mm1Res 后把原始 2048 float 位型直接写入输出张量,
+// host 侧按 128-token tile 解码比对, 定位 cube 落盘丢失 (不执行排序/输出)
+constexpr float LIQ_DEBUG_DUMP_MM1 = -20.0f;
 
 template <typename Q_T, typename K_T, typename OUT_T, const bool PAGE_ATTENTION = false,
           LI_LAYOUT Q_LAYOUT_T = LI_LAYOUT::BSND, LI_LAYOUT K_LAYOUT_T = LI_LAYOUT::PA_BSND, typename... Args>
