@@ -22,6 +22,9 @@ using namespace LIQKernel;
 
 #define INVOKE_LI_NO_KFC_OP_IMPL(templateClass, ...)                                                         \
     do {                                                                                                     \
+        if (prefetchStagingBuf == nullptr) {                                                                 \
+            return;  /* TODO(debug): 参数门, 不读tiling — 诊断完删除! */                                      \
+        }                                                                                                    \
         templateClass<LIQType<__VA_ARGS__>> op;                                                              \
         GET_TILING_DATA_WITH_STRUCT(LIQTilingData, tiling_data_in, tiling);                                  \
         const LIQTilingData *__restrict tiling_data = &tiling_data_in;                                       \

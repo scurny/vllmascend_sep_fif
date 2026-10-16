@@ -53,10 +53,28 @@ import sys
 _stage = os.environ.get("LIQ_STAGE")
 if _stage:
     _s = float(_stage)
-    print(f"=== STAGE {_s:g}: kernel gate ema_threshold={-_s:g} ===")
+    _with_pf = os.environ.get("LIQ_WITH_PF") == "1"
+    print(f"=== STAGE {_s:g}: kernel gate ema_threshold={-_s:g} with_pf={_with_pf} ===")
+    _kw = {}
+    if _with_pf:
+        # 带 prefetch 张量: 让 kernel 参数门(依赖 prefetchStagingBuf != null)不触发,
+        # 从而走到 tiling 读取 + 标记写入 + ema 门
+        _kseq = block_num * block_size
+        _tsbk, _keb = 256, 384
+        _kp = torch.randint(0, 256, (_kseq, _tsbk), dtype=torch.uint8, device='npu')
+        _vp = torch.randint(0, 256, (_kseq, _keb - _tsbk), dtype=torch.uint8, device='npu')
+        _ar = torch.arange(_kseq)
+        _gva = torch.empty((B, _kseq, 2), dtype=torch.int64)
+        _gva[:, :, 0] = _kp.data_ptr() + _ar * _tsbk
+        _gva[:, :, 1] = _vp.data_ptr() + _ar * (_keb - _tsbk)
+        _kw = dict(token_gva_table=_gva.to('npu'),
+                   prefetch_staging_buf=torch.zeros((topk * 2, _keb), dtype=torch.uint8, device='npu'),
+                   prefetch_slot_counter=torch.zeros(1, dtype=torch.int32, device='npu'),
+                   token_to_prefetch_slot=torch.full((B, _kseq), -1, dtype=torch.int32, device='npu'),
+                   token_size_bytes_k=_tsbk)
     _out = None
     try:
-        _out = run_op(ema_threshold=-_s)
+        _out = run_op(ema_threshold=-_s, **_kw)
         torch.npu.synchronize()
         print(f"=== STAGE {_s:g} OK (无 aicore 错误) ===")
     except RuntimeError as e:
@@ -69,7 +87,8 @@ if _stage:
             if _raw == _exp:
                 _hint = f"等于期望的 -{_s:g}f 位型, 阶段门在跑"
             elif _raw == 0x7E7E7E7E:
-                _hint = "哨兵未覆盖 -> kernel 根本没执行入口写入, 跑的是不含调试补丁的旧二进制!"
+                _hint = ("参数门生效(kernel 未读 tiling 即返回, 预期结果)" if not _with_pf
+                         else "哨兵未覆盖 -> kernel 没执行入口写入, 旧二进制!")
             elif _raw == 0x00000000:
                 _hint = "kernel 读到 0.0 -> emaThreshold 字段没进 tiling buffer(截断/未初始化), 对照 [LIQ_TILING] TilingBuf 的 capacity 和 structSize"
             else:
