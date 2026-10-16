@@ -41,15 +41,16 @@ using namespace LIQKernel;
     } while (0)
 
 template <int DT_Q, int DT_K, int DT_OUT, int PAGE_ATTENTION, int Q_LAYOUT_T, int K_LAYOUT_T>
+// NOTE: 实参顺序必须与 op_host/lightning_indexer_quant_def.cpp 的声明一致
+// (inputs 按定义序 + outputs + workspace + tiling), 否则运行时传参错位,
+// 曾导致 tiling 槽位收到 NULL/prefetch_slot_counter 指针而 aicore 95/271 崩溃.
 __global__ __aicore__ void lightning_indexer_quant(__gm__ uint8_t *query, __gm__ uint8_t *key, __gm__ uint8_t *weights,
                                                    __gm__ uint8_t *queryScale, __gm__ uint8_t *keyScale,
                                                    __gm__ uint8_t *actualSeqLengthsQ, __gm__ uint8_t *actualSeqLengthsK,
-                                                   __gm__ uint8_t *blocktable, __gm__ uint8_t *sparseIndices,
-                                                   __gm__ uint8_t *workspace, __gm__ uint8_t *tiling,
-                                                   __gm__ uint8_t *tokenGvaTable = nullptr,
-                                                   __gm__ uint8_t *prefetchStagingBuf = nullptr,
-                                                   __gm__ uint8_t *prefetchSlotCounter = nullptr,
-                                                   __gm__ uint8_t *tokenToPrefetchSlot = nullptr)
+                                                   __gm__ uint8_t *blocktable, __gm__ uint8_t *tokenGvaTable,
+                                                   __gm__ uint8_t *prefetchStagingBuf, __gm__ uint8_t *prefetchSlotCounter,
+                                                   __gm__ uint8_t *tokenToPrefetchSlot, __gm__ uint8_t *sparseIndices,
+                                                   __gm__ uint8_t *workspace, __gm__ uint8_t *tiling)
 {
 #if (__CCE_AICORE__ == 200)
     // A2 不编
