@@ -20,14 +20,22 @@ block_size = 128
 asl_k = int(os.environ.get("LIQ_ASL", 4096))   # 有效 KV token 数, 须 <= block_num*block_size 且 > topk
 topk = int(os.environ.get("LIQ_TOPK", 2048))
 
-query = torch.randint(-128, 127, (B * S1, N1, D), dtype=torch.int8, device='npu')
-key = torch.randint(-128, 127, (block_num, block_size, 1, D), dtype=torch.int8, device='npu')
-weights = torch.randn(B * S1, N1, dtype=torch.float16, device='npu')
-query_dequant_scale = torch.randn(B * S1, N1, dtype=torch.float16, device='npu')
-key_dequant_scale = torch.randn(block_num, block_size, 1, dtype=torch.float16, device='npu')
-actual_seq_lengths_query = torch.tensor([S1], dtype=torch.int32, device='npu')
-actual_seq_lengths_key = torch.tensor([asl_k], dtype=torch.int32, device='npu')
-block_table = torch.arange(block_num, dtype=torch.int32, device='npu').view(B, -1)
+def build_inputs(seed=0):
+    """构建一组输入(全局变量), 便于多 seed 对拍"""
+    global query, key, weights, query_dequant_scale, key_dequant_scale, \
+        actual_seq_lengths_query, actual_seq_lengths_key, block_table
+    torch.manual_seed(seed)
+    query = torch.randint(-128, 127, (B * S1, N1, D), dtype=torch.int8, device='npu')
+    key = torch.randint(-128, 127, (block_num, block_size, 1, D), dtype=torch.int8, device='npu')
+    weights = torch.randn(B * S1, N1, dtype=torch.float16, device='npu')
+    query_dequant_scale = torch.randn(B * S1, N1, dtype=torch.float16, device='npu')
+    key_dequant_scale = torch.randn(block_num, block_size, 1, dtype=torch.float16, device='npu')
+    actual_seq_lengths_query = torch.tensor([S1], dtype=torch.int32, device='npu')
+    actual_seq_lengths_key = torch.tensor([asl_k], dtype=torch.int32, device='npu')
+    block_table = torch.arange(block_num, dtype=torch.int32, device='npu').view(B, -1)
+
+
+build_inputs(0)
 
 
 def run_op(**kw):
@@ -48,6 +56,70 @@ def check_out(tag, out):
     print(tag, "shape:", tuple(out.shape), "dtype:", out.dtype)
     print(tag, "sample:", out.flatten()[:16].cpu().tolist())
     print(tag, "min/max:", out.min().item(), out.max().item())  # 索引应在 [-1, asl_k) 内
+
+
+# ---------------- 金标准参考 (与 kernel arch35 精度模型逐位对齐) ----------------
+# kernel 打分链路 (见 service_cube/vector_arch35.h):
+#   C_qk[s1*g, s2] = Σ_d q[s1,g,d]·k[s2,d]           (int8 精确累加, int32)
+#   S = fp16(C_qk · 2^-10)                            (Fixpipe DEQF16, prequant 0x3a800000)
+#   w' = fp16(weights·qScale)                         (Vec0 half 乘法)
+#   C_ws[s1, s2] = Σ_g w'[s1,g]·S[s1*g+g, s2]         (Mmad half×half → fp32 累加)
+#   score[s1, s2] = C_ws[s1, s2] · fp32(kScale[s2])   (Vec1)
+# sparse_mode=3 (causal 下三角): 第 t 行有效长度 = asl_k - asl_q + 1 + t
+def liq_golden():
+    q = query.cpu().float()                                    # [T, G, D]
+    blk, bs = key.shape[0], key.shape[1]
+    bt = block_table[0].cpu().long()
+    s2 = torch.arange(blk * bs)
+    phys = bt[s2 // bs] * bs + (s2 % bs)                       # 逻辑 token -> 物理行 (PA 布局)
+    k_tokens = key.view(blk * bs, -1).cpu().float()[phys]      # [S2, D]
+    dot = torch.einsum('tgd,sd->tgs', q, k_tokens) / 1024.0    # int8 点积, fp32 精确承载
+    dot = dot.to(torch.float16).float()                        # DEQF16 舍入
+    w = (weights.cpu() * query_dequant_scale.cpu()).float()    # fp16 乘法舍入后转 fp32
+    score = torch.einsum('tg,tgs->ts', w, dot)                 # fp32 头累加
+    ks = key_dequant_scale.view(blk * bs).cpu().float()[phys]  # [S2]
+    score = score * ks
+    t = torch.arange(q.shape[0])
+    valid = (asl_k - S1 + 1 + t).clamp(0, asl_k)               # causal 有效长度
+    for r in range(q.shape[0]):
+        score[r, valid[r]:] = float('-inf')
+    return score
+
+
+FAILURES = []
+
+
+def check_topk_vs_golden(tag, out, score):
+    """逐名次比对: 索引不重复/不越界/按分数降序/名次分数与参考一致(容忍 fp16 平分扰动)"""
+    out_idx = out.reshape(-1, out.shape[-1]).cpu()
+    for r in range(out_idx.shape[0]):
+        oi = out_idx[r].long()
+        valid_len = int((score[r] > float('-inf')).sum())
+        cmp_len = min(valid_len, topk)
+        if cmp_len > 0 and (int(oi[:cmp_len].min()) < 0 or int(oi[:cmp_len].max()) >= valid_len):
+            FAILURES.append(f"{tag} row{r}: 索引越界 (min={int(oi.min())}, max={int(oi.max())}, valid={valid_len})")
+            return
+        if torch.unique(oi[:cmp_len]).numel() != cmp_len:
+            FAILURES.append(f"{tag} row{r}: 存在重复索引")
+            return
+        s_out = score[r, oi[:cmp_len]]
+        if cmp_len > 1 and bool((s_out[1:] > s_out[:-1]).any()):
+            FAILURES.append(f"{tag} row{r}: 输出未按分数降序")
+            return
+        s_ref = torch.sort(score[r], descending=True).values[:cmp_len]
+        gap = (s_out - s_ref).abs()
+        tol = 1e-3 * s_ref.abs().clamp(min=1.0)
+        nbad = int((gap > tol).sum())
+        if nbad:
+            FAILURES.append(f"{tag} row{r}: {nbad}/{cmp_len} 个名次分数与参考偏差超容忍 "
+                            f"(最大偏差 {float(gap.max()):.4f})")
+            return
+        if cmp_len < topk and not torch.equal(oi[cmp_len:], torch.full_like(oi[cmp_len:], -1)):
+            FAILURES.append(f"{tag} row{r}: 有效长度不足 topk 时尾部应填充 -1")
+            return
+    top = out_idx[0][:8].tolist()
+    tops = ", ".join(f"{i}:{score[0, i]:.1f}" for i in top)
+    print(f"{tag} 金标准对拍通过 (top8: {tops})")
 
 
 # ---------------- 崩溃二分: LIQ_STAGE=1/2/3 时只跑对应阶段 gate (ema_threshold 传负值) ----------------
@@ -103,11 +175,15 @@ if _stage:
             print(f"[LIQ_DEBUG] 输出读取失败(设备异常态): {str(e2)[:120]}")
     sys.exit(0)
 
-# ---------------- Test 1: 不带 prefetch ----------------
-print("=== Test 1: 不带 prefetch ===")
-out = run_op()
-check_out("[T1]", out)
-print("=== Test 1 PASS ===")
+# ---------------- Test 1: 不带 prefetch, 多 seed 金标准对拍 ----------------
+for seed in (0, 1, 2):
+    build_inputs(seed)
+    out = run_op()
+    check_out(f"[T1 s{seed}]", out)
+    _n = len(FAILURES)
+    check_topk_vs_golden(f"[T1 seed={seed}]", out, liq_golden())
+    print(f"=== Test 1 seed={seed} {'FAIL' if len(FAILURES) > _n else 'PASS'} ===")
+build_inputs(0)  # 恢复 seed 0, 供后续测试与金标准
 
 # ---------------- prefetch 公共张量 ----------------
 # kernel 语义: s2Size = block_num * block_size (PA 布局),
@@ -135,30 +211,51 @@ def make_prefetch_tensors():
 
 # ---------------- Test 2a: prefetch 开启但零触发 ----------------
 print("=== Test 2a: prefetch 开启, 阈值巨大 (零触发) ===")
+_n = len(FAILURES)
 staging, counter, slot_map = make_prefetch_tensors()
 out2a = run_op(token_gva_table=token_gva_table, prefetch_staging_buf=staging,
                prefetch_slot_counter=counter, token_to_prefetch_slot=slot_map,
                ema_threshold=1e30, token_size_bytes_k=token_size_bytes_k)
 check_out("[T2a]", out2a)
-print("[T2a] used slots:", int((slot_map != -1).sum().item()), "(应为 0)")
-print("=== Test 2a PASS ===")
+check_topk_vs_golden("[T2a]", out2a, liq_golden())  # prefetch 不应影响主输出
+used2a = int((slot_map != -1).sum().item())
+print("[T2a] used slots:", used2a, "(应为 0)")
+if used2a != 0:
+    FAILURES.append(f"[T2a] 零触发阈值下仍占用 {used2a} 个 slot")
+print(f"=== Test 2a {'FAIL' if len(FAILURES) > _n else 'PASS'} ===")
 
 # ---------------- Test 2b: 真实 prefetch ----------------
 # 阈值调参: 随机数据下 score 标准差约 ~6e4, 200000 约 3σ 只触发少量 token。
 # kernel 内 bitPositions 数组上限 256: 单 tile 超阈值 token 数须远小于 256,
 # used=0 则降到 100000, 崩了则升到 1000000
 print("=== Test 2b: 真实 prefetch ===")
+_n = len(FAILURES)
 staging, counter, slot_map = make_prefetch_tensors()
 out2b = run_op(token_gva_table=token_gva_table, prefetch_staging_buf=staging,
                prefetch_slot_counter=counter, token_to_prefetch_slot=slot_map,
                ema_threshold=200000.0, token_size_bytes_k=token_size_bytes_k)
 check_out("[T2b]", out2b)
-used = int((slot_map[0] != -1).sum().item())
-print("[T2b] used slots:", used)
-if used > 0:
-    tok = (slot_map[0] != -1).nonzero()[0].item()
-    slot = slot_map[0, tok].item()
-    k_ok = torch.equal(staging[slot, :token_size_bytes_k].cpu(), k_pool[tok].cpu())
-    v_ok = torch.equal(staging[slot, token_size_bytes_k:].cpu(), v_pool[tok].cpu())
-    print(f"[T2b] token {tok} -> slot {slot}: K bytes match={k_ok}, V bytes match={v_ok}")
-print("=== Test 2b PASS ===")
+check_topk_vs_golden("[T2b]", out2b, liq_golden())  # prefetch 不应影响主输出
+used2b = int((slot_map[0] != -1).sum().item())
+print("[T2b] used slots:", used2b)
+if used2b == 0:
+    FAILURES.append("[T2b] ema=200000 未触发任何 prefetch, 无法验证搬运正确性 (考虑降低阈值)")
+else:
+    bad = 0
+    for tok in (slot_map[0] != -1).nonzero().flatten()[:8].tolist():
+        slot = int(slot_map[0, tok].item())
+        k_ok = torch.equal(staging[slot, :token_size_bytes_k].cpu(), k_pool[tok].cpu())
+        v_ok = torch.equal(staging[slot, token_size_bytes_k:].cpu(), v_pool[tok].cpu())
+        if not (k_ok and v_ok):
+            bad += 1
+            print(f"[T2b] token {tok} -> slot {slot}: K bytes match={k_ok}, V bytes match={v_ok}")
+    if bad:
+        FAILURES.append(f"[T2b] {bad} 个 slot 搬运内容与源不符")
+print(f"=== Test 2b {'FAIL' if len(FAILURES) > _n else 'PASS'} ===")
+
+if FAILURES:
+    print("==== 存在失败项 ====")
+    for f in FAILURES:
+        print(" -", f)
+    sys.exit(1)
+print("==== ALL PASS ====")
