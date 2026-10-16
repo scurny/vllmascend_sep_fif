@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+    cat <<'HELP'
+Usage: bash tools/run_liq_test.sh [options]
+
+Run test_liq.py T1-T6 in an activated vLLM-Ascend/CANN environment.
+The test uses HBM K/V pools; it does not validate registered DDR pools.
+
+Options:
+  --build           Rebuild/install custom ops and the torch extension first.
+                    Uses pip --no-deps --no-build-isolation; dependencies must exist.
+  --device ID       Select one physical NPU via ASCEND_RT_VISIBLE_DEVICES.
+                    Otherwise preserve the current device visibility.
+  --python PATH     Python interpreter (default: python).
+  --log-dir DIR     Log directory (default: a new directory under /tmp).
+  -h, --help        Show this help.
+
+Examples:
+  bash tools/run_liq_test.sh --build --device 0
+  bash tools/run_liq_test.sh --python /path/to/venv/bin/python
+HELP
+}
+
+fail() {
+    printf '[LIQ] ERROR: %s\n' "$*" >&2
+    exit 2
+}
+
+repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+build=0
+python_bin=python
+device=''
+log_dir=''
+while (($#)); do
+    case "$1" in
+        --build) build=1; shift ;;
+        --device|--python|--log-dir)
+            (($# >= 2)) && [[ -n "$2" ]] || fail "$1 requires a value"
+            case "$1" in
+                --device) device=$2 ;;
+                --python) python_bin=$2 ;;
+                --log-dir) log_dir=$2 ;;
+            esac
+            shift 2
+            ;;
+        -h|--help) usage; exit 0 ;;
+        *) fail "Unknown option: $1 (see --help)" ;;
+    esac
+done
+
+[[ -z "$device" || "$device" =~ ^[0-9]+$ ]] || fail '--device must be a nonnegative NPU ID'
+python_bin=$(command -v "$python_bin") || fail 'Python not found; check --python or activate your environment'
+if [[ "$python_bin" != /* ]]; then
+    python_bin="$(cd -- "$(dirname -- "$python_bin")" && pwd)/$(basename -- "$python_bin")"
+fi
+command -v npu-smi >/dev/null || fail 'npu-smi not found; activate the NPU/CANN environment first'
+[[ -f "$repo_dir/test_liq.py" ]] || fail "Missing $repo_dir/test_liq.py"
+
+if [[ -z "$log_dir" ]]; then
+    log_dir=$(mktemp -d /tmp/liq-test.XXXXXX)
+fi
+mkdir -p -- "$log_dir"
+log_dir=$(cd -- "$log_dir" && pwd)
+printf '[LIQ] Logs: %s\n' "$log_dir"
+trap 'status=$?; printf "[LIQ] Exit status: %s; logs: %s\n" "$status" "$log_dir"' EXIT
+
+run_logged() {
+    local stage=$1
+    local -a statuses
+    shift
+    printf '\n[LIQ] Running %s\n' "$stage"
+    set +e
+    "$@" 2>&1 | tee "$log_dir/$stage.log"
+    statuses=("${PIPESTATUS[@]}")
+    set -e
+    if ((statuses[0] != 0)); then
+        printf '[LIQ] %s failed (exit %s)\n' "$stage" "${statuses[0]}" >&2
+        return "${statuses[0]}"
+    fi
+    return "${statuses[1]}"
+}
+
+cd -- "$repo_dir"
+if [[ -n "$device" ]]; then
+    export ASCEND_RT_VISIBLE_DEVICES="$device"
+fi
+# LIQ_STAGE exits after a debug gate; this runner always executes the full suite.
+unset LIQ_STAGE
+
+run_logged npu-info npu-smi info
+run_logged preflight "$python_bin" - <<'PY'
+import torch
+import torch_npu
+
+print("PyTorch:", torch.__version__, "TorchNPU:", torch_npu.__version__)
+if not torch.npu.is_available():
+    raise SystemExit("NPU unavailable; activate the NPU/CANN environment first")
+device_name = torch.npu.get_device_name(0)
+print("NPU:", device_name)
+if "950" not in device_name:
+    raise SystemExit("This test runner requires an Ascend 950 NPU")
+PY
+
+if ((build)); then
+    run_logged submodules git submodule update --init --recursive
+    run_logged build env COMPILE_CUSTOM_KERNELS=1 VLLM_ASCEND_SKIP_ACLNN_BUILD=0 \
+        "$python_bin" -m pip install -e . --no-build-isolation --no-deps -v
+fi
+
+vendor_dir="$repo_dir/vllm_ascend/_cann_ops_custom/vendors/custom_transformer"
+[[ -d "$vendor_dir/op_api/lib" ]] || fail 'Custom ops missing; rerun with --build'
+export ASCEND_CUSTOM_OPP_PATH="$vendor_dir${ASCEND_CUSTOM_OPP_PATH:+:$ASCEND_CUSTOM_OPP_PATH}"
+export LD_LIBRARY_PATH="$vendor_dir/op_api/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+run_logged extension "$python_bin" - <<'PY'
+from pathlib import Path
+
+from vllm_ascend import vllm_ascend_C
+
+extension = Path(vllm_ascend_C.__file__).resolve()
+print("Torch extension:", extension)
+if extension.parent != (Path.cwd() / "vllm_ascend").resolve():
+    raise SystemExit("Loaded an extension outside this checkout; rerun with --build")
+PY
+
+printf '[LIQ] Testing HBM GVA copies; registered DDR pools require separate validation.\n'
+run_logged test "$python_bin" -u -X faulthandler "$repo_dir/test_liq.py"
+printf '[LIQ] T1-T6 completed successfully.\n'
