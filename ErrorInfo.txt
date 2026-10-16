@@ -1,9 +1,4 @@
-[root@[localhost](https://localhost) vllmascend_sep_fif]# ASCEND_RT_VISIBLE_DEVICES=0 LIQ_FILL=1 timeout 300 python3.11 -u test_liq.py 2>&1 | grep -v LIQ_TILING | tail -70
-INFO 10-16 18:15:03 [**init**.py:52] Available plugins for group vllm.platform_plugins:
-INFO 10-16 18:15:03 [**init**.py:54] - ascend -> vllm_ascend:register
-INFO 10-16 18:15:03 [**init**.py:57] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
-INFO 10-16 18:15:03 [**init**.py:237] Platform plugin ascend is activated
-INFO 10-16 18:15:03 [platform.py:71] Breakable CUDAGraph on Ascend is opt-in; using VLLM_USE_BREAKABLE_CUDAGRAPH=0.
+[root@[localhost](https://localhost) vllmascend_sep_fif]# ASCEND_RT_VISIBLE_DEVICES=0 LIQ_FILL=1 timeout 300 python3.11 -u test_liq.py 2>&1 | grep -v LIQ_TILING | tail -60
 [LIQ_ADPT] enter npu_lightning_indexer_quant (adpt built Oct 16 2026 18:14:14)
 [LIQ_ADPT] before EXEC_NPU_CMD: q=[1,64,128] k=[100,128,1,128] layout=TND/PA_BSND sparse_count=2048 sparse_mode=3 ema=0.000000 tskb=0 has_gva=0 has_staging=0 has_counter=0 has_slot=0
 [LIQ_ADPT] after EXEC_NPU_CMD: out=[1,1,2048]
@@ -11,6 +6,8 @@ INFO 10-16 18:15:03 [platform.py:71] Breakable CUDAGraph on Ascend is opt-in; us
 [T1 s0] sample: [0, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134]
 [T1 s0] min/max: 0 2122219134
 [T1 s0] [FILL] kernel 覆盖 2033/2048 单元，非哨兵中合法索引数 2033; 非哨兵前 12: [0, 146, 149, 151, 152, 153, 154, 156, 157, 158, 161, 164]
+[T1 s0] [FILL] 写入位置 首 10=[0, 16, 17, 18, 19, 20, 21, 22, 23, 24] 尾 10=[2038, 2039, 2040, 2041, 2042, 2043, 2044, 2045, 2046, 2047]; 值升序 = False, 唯一数 = 2032, 后 12=[288, 289, 290, 291, 292, 293, 294, 295, 296, 297, 298, 299]
+[T1 seed=0] [SET] kernel 写入 2032 个值 (唯一 2032), 参考 top2048 集合交集 1033
 === Test 1 seed=0 FAIL ===
 [LIQ_ADPT] enter npu_lightning_indexer_quant (adpt built Oct 16 2026 18:14:14)
 [LIQ_ADPT] before EXEC_NPU_CMD: q=[1,64,128] k=[100,128,1,128] layout=TND/PA_BSND sparse_count=2048 sparse_mode=3 ema=0.000000 tskb=0 has_gva=0 has_staging=0 has_counter=0 has_slot=0
@@ -19,6 +16,8 @@ INFO 10-16 18:15:03 [platform.py:71] Breakable CUDAGraph on Ascend is opt-in; us
 [T1 s1] sample: [0, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134]
 [T1 s1] min/max: 0 2122219134
 [T1 s1] [FILL] kernel 覆盖 2033/2048 单元，非哨兵中合法索引数 2033; 非哨兵前 12: [0, 146, 147, 148, 149, 150, 151, 152, 154, 155, 156, 158]
+[T1 s1] [FILL] 写入位置 首 10=[0, 16, 17, 18, 19, 20, 21, 22, 23, 24] 尾 10=[2038, 2039, 2040, 2041, 2042, 2043, 2044, 2045, 2046, 2047]; 值升序 = False, 唯一数 = 2032, 后 12=[303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314]
+[T1 seed=1] [SET] kernel 写入 2032 个值 (唯一 2032), 参考 top2048 集合交集 1028
 === Test 1 seed=1 FAIL ===
 [LIQ_ADPT] enter npu_lightning_indexer_quant (adpt built Oct 16 2026 18:14:14)
 [LIQ_ADPT] before EXEC_NPU_CMD: q=[1,64,128] k=[100,128,1,128] layout=TND/PA_BSND sparse_count=2048 sparse_mode=3 ema=0.000000 tskb=0 has_gva=0 has_staging=0 has_counter=0 has_slot=0
@@ -27,6 +26,8 @@ INFO 10-16 18:15:03 [platform.py:71] Breakable CUDAGraph on Ascend is opt-in; us
 [T1 s2] sample: [0, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134]
 [T1 s2] min/max: 0 2122219134
 [T1 s2] [FILL] kernel 覆盖 2033/2048 单元，非哨兵中合法索引数 2033; 非哨兵前 12: [0, 150, 152, 155, 156, 157, 158, 159, 160, 161, 163, 164]
+[T1 s2] [FILL] 写入位置 首 10=[0, 16, 17, 18, 19, 20, 21, 22, 23, 24] 尾 10=[2038, 2039, 2040, 2041, 2042, 2043, 2044, 2045, 2046, 2047]; 值升序 = False, 唯一数 = 2032, 后 12=[290, 291, 292, 293, 294, 295, 296, 297, 298, 299, 300, 301]
+[T1 seed=2] [SET] kernel 写入 2032 个值 (唯一 2032), 参考 top2048 集合交集 1046
 === Test 1 seed=2 FAIL ===
 === Test 2a: prefetch 开启，阈值巨大 (零触发) ===
 [LIQ_ADPT] enter npu_lightning_indexer_quant (adpt built Oct 16 2026 18:14:14)
@@ -36,6 +37,8 @@ INFO 10-16 18:15:03 [platform.py:71] Breakable CUDAGraph on Ascend is opt-in; us
 [T2a] sample: [1900671690, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134]
 [T2a] min/max: 0 2122219134
 [T2a] [FILL] kernel 覆盖 2033/2048 单元，非哨兵中合法索引数 2032; 非哨兵前 12: [1900671690, 146, 149, 151, 152, 153, 154, 156, 157, 158, 161, 164]
+[T2a] [FILL] 写入位置 首 10=[0, 16, 17, 18, 19, 20, 21, 22, 23, 24] 尾 10=[2038, 2039, 2040, 2041, 2042, 2043, 2044, 2045, 2046, 2047]; 值升序 = False, 唯一数 = 2033, 后 12=[288, 289, 290, 291, 292, 293, 294, 295, 296, 297, 298, 299]
+[T2a] [SET] kernel 写入 2032 个值 (唯一 2032), 参考 top2048 集合交集 1033
 [T2a] used slots: 0 (应为 0)
 === Test 2a FAIL ===
 === Test 2b: 真实 prefetch ===
@@ -46,10 +49,9 @@ INFO 10-16 18:15:03 [platform.py:71] Breakable CUDAGraph on Ascend is opt-in; us
 [T2b] sample: [1212370944, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134]
 [T2b] min/max: 0 2122219134
 [T2b] [FILL] kernel 覆盖 2033/2048 单元，非哨兵中合法索引数 2032; 非哨兵前 12: [1212370944, 146, 149, 151, 152, 153, 154, 156, 157, 158, 161, 164]
+[T2b] [FILL] 写入位置 首 10=[0, 16, 17, 18, 19, 20, 21, 22, 23, 24] 尾 10=[2038, 2039, 2040, 2041, 2042, 2043, 2044, 2045, 2046, 2047]; 值升序 = False, 唯一数 = 2033, 后 12=[288, 289, 290, 291, 292, 293, 294, 295, 296, 297, 298, 299]
+[T2b] [SET] kernel 写入 2032 个值 (唯一 2032), 参考 top2048 集合交集 1033
 [T2b] used slots: 3
-[T2b] token 2206 -> slot 128: K=False V=False, staging 全零 = False, staging 前 8B=[252, 20, 33, 88, 113, 16, 250, 3], 期望前 8B=[71, 7, 60, 215, 58, 48, 60, 141]
-[T2b] token 2534 -> slot 129: K=False V=False, staging 全零 = False, staging 前 8B=[252, 20, 33, 88, 113, 16, 250, 3], 期望前 8B=[166, 236, 88, 241, 145, 169, 144, 107]
-[T2b] token 3742 -> slot 130: K=False V=False, staging 全零 = False, staging 前 8B=[166, 236, 88, 241, 145, 169, 144, 107], 期望前 8B=[252, 20, 33, 88, 113, 16, 250, 3]
 === Test 2b FAIL ===
 ==== 存在失败项 ====
 
@@ -58,4 +60,56 @@ INFO 10-16 18:15:03 [platform.py:71] Breakable CUDAGraph on Ascend is opt-in; us
 - [T1 seed=2] row0: 索引越界 (min=0, max=2122219134, valid=4096)
 - [T2a] row0: 索引越界 (min=0, max=2122219134, valid=4096)
 - [T2b] row0: 索引越界 (min=0, max=2122219134, valid=4096)
-- [T2b] 3 个 slot 搬运内容与源不符
+[root@[localhost](https://localhost) vllmascend_sep_fif]# ASCEND_RT_VISIBLE_DEVICES=0 LIQ_FILL=1 LIQ_TOPK=1024 LIQ_ASL=2048 LIQ_BLOCKNUM=16 
+timeout 300 python3.11 -u test_liq.py 2>&1 | grep -v LIQ_TILING | tail -50
+[LIQ_ADPT] enter npu_lightning_indexer_quant (adpt built Oct 16 2026 18:14:14)
+[LIQ_ADPT] before EXEC_NPU_CMD: q=[1,64,128] k=[16,128,1,128] layout=TND/PA_BSND sparse_count=1024 sparse_mode=3 ema=0.000000 tskb=0 has_gva=0 has_staging=0 has_counter=0 has_slot=0
+[LIQ_ADPT] after EXEC_NPU_CMD: out=[1,1,1024]
+[T1 s1] shape: (1, 1, 1024) dtype: torch.int32
+[T1 s1] sample: [0, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134]
+[T1 s1] min/max: 0 2122219134
+[T1 s1] [FILL] kernel 覆盖 1009/1024 单元，非哨兵中合法索引数 1009; 非哨兵前 12: [0, 146, 147, 148, 149, 150, 151, 152, 154, 155, 156, 158]
+[T1 s1] [FILL] 写入位置 首 10=[0, 16, 17, 18, 19, 20, 21, 22, 23, 24] 尾 10=[1014, 1015, 1016, 1017, 1018, 1019, 1020, 1021, 1022, 1023]; 值升序 = False, 唯一数 = 1008, 后 12=[85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96]
+[T1 seed=1] [SET] kernel 写入 1008 个值 (唯一 1008), 参考 top1024 集合交集 501
+=== Test 1 seed=1 FAIL ===
+[LIQ_ADPT] enter npu_lightning_indexer_quant (adpt built Oct 16 2026 18:14:14)
+[LIQ_ADPT] before EXEC_NPU_CMD: q=[1,64,128] k=[16,128,1,128] layout=TND/PA_BSND sparse_count=1024 sparse_mode=3 ema=0.000000 tskb=0 has_gva=0 has_staging=0 has_counter=0 has_slot=0
+[LIQ_ADPT] after EXEC_NPU_CMD: out=[1,1,1024]
+[T1 s2] shape: (1, 1, 1024) dtype: torch.int32
+[T1 s2] sample: [0, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134]
+[T1 s2] min/max: 0 2122219134
+[T1 s2] [FILL] kernel 覆盖 1009/1024 单元，非哨兵中合法索引数 1009; 非哨兵前 12: [0, 150, 152, 155, 156, 157, 158, 159, 160, 161, 163, 164]
+[T1 s2] [FILL] 写入位置 首 10=[0, 16, 17, 18, 19, 20, 21, 22, 23, 24] 尾 10=[1014, 1015, 1016, 1017, 1018, 1019, 1020, 1021, 1022, 1023]; 值升序 = False, 唯一数 = 1008, 后 12=[114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125]
+[T1 seed=2] [SET] kernel 写入 1008 个值 (唯一 1008), 参考 top1024 集合交集 507
+=== Test 1 seed=2 FAIL ===
+=== Test 2a: prefetch 开启，阈值巨大 (零触发) ===
+[LIQ_ADPT] enter npu_lightning_indexer_quant (adpt built Oct 16 2026 18:14:14)
+[LIQ_ADPT] before EXEC_NPU_CMD: q=[1,64,128] k=[16,128,1,128] layout=TND/PA_BSND sparse_count=1024 sparse_mode=3 ema=1000000000000000019884624838656.000000 tskb=256 has_gva=1 has_staging=1 has_counter=1 has_slot=1
+[LIQ_ADPT] after EXEC_NPU_CMD: out=[1,1,1024]
+[T2a] shape: (1, 1, 1024) dtype: torch.int32
+[T2a] sample: [1900671690, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134]
+[T2a] min/max: 0 2122219134
+[T2a] [FILL] kernel 覆盖 1009/1024 单元，非哨兵中合法索引数 1008; 非哨兵前 12: [1900671690, 146, 149, 151, 152, 153, 154, 156, 157, 158, 161, 164]
+[T2a] [FILL] 写入位置 首 10=[0, 16, 17, 18, 19, 20, 21, 22, 23, 24] 尾 10=[1014, 1015, 1016, 1017, 1018, 1019, 1020, 1021, 1022, 1023]; 值升序 = False, 唯一数 = 1009, 后 12=[77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88]
+[T2a] [SET] kernel 写入 1008 个值 (唯一 1008), 参考 top1024 集合交集 497
+[T2a] used slots: 0 (应为 0)
+=== Test 2a FAIL ===
+=== Test 2b: 真实 prefetch ===
+[LIQ_ADPT] enter npu_lightning_indexer_quant (adpt built Oct 16 2026 18:14:14)
+[LIQ_ADPT] before EXEC_NPU_CMD: q=[1,64,128] k=[16,128,1,128] layout=TND/PA_BSND sparse_count=1024 sparse_mode=3 ema=200000.000000 tskb=256 has_gva=1 has_staging=1 has_counter=1 has_slot=1
+[LIQ_ADPT] after EXEC_NPU_CMD: out=[1,1,1024]
+[T2b] shape: (1, 1, 1024) dtype: torch.int32
+[T2b] sample: [1212370944, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134, 2122219134]
+[T2b] min/max: 0 2122219134
+[T2b] [FILL] kernel 覆盖 1009/1024 单元，非哨兵中合法索引数 1008; 非哨兵前 12: [1212370944, 146, 149, 151, 152, 153, 154, 156, 157, 158, 161, 164]
+[T2b] [FILL] 写入位置 首 10=[0, 16, 17, 18, 19, 20, 21, 22, 23, 24] 尾 10=[1014, 1015, 1016, 1017, 1018, 1019, 1020, 1021, 1022, 1023]; 值升序 = False, 唯一数 = 1009, 后 12=[77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88]
+[T2b] [SET] kernel 写入 1008 个值 (唯一 1008), 参考 top1024 集合交集 497
+[T2b] used slots: 8
+=== Test 2b FAIL ===
+==== 存在失败项 ====
+- [T1 seed=0] row0: 索引越界 (min=0, max=2122219134, valid=2048)
+- [T1 seed=1] row0: 索引越界 (min=0, max=2122219134, valid=2048)
+- [T1 seed=2] row0: 索引越界 (min=0, max=2122219134, valid=2048)
+- [T2a] row0: 索引越界 (min=0, max=2122219134, valid=2048)
+- [T2b] row0: 索引越界 (min=0, max=2122219134, valid=2048)
+[root@[localhost](https://localhost) vllmascend_sep_fif]#

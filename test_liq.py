@@ -69,6 +69,16 @@ def check_out(tag, out):
                    f"非哨兵中合法索引数 {n_valid}; 非哨兵前12: {vals[:12]}")
         print(tag, f"[FILL] 写入位置 首10={pos[:10]} 尾10={pos[-10:]}; "
                    f"值升序={asc}, 唯一数={len(set(vals))}, 后12={vals[-12:]}")
+        if vals:
+            vmin, vmax = min(vals), max(vals)
+            nb = 16
+            hist = [0] * nb
+            for v in vals:
+                hist[min(nb - 1, v * nb // max(asl_k, 1))] += 1
+            wraps = [i for i in range(1, len(vals)) if vals[i] < vals[i - 1]]
+            winfo = [(vals[w - 1], vals[w]) for w in wraps[:5]]
+            print(tag, f"[FILL] 值域 [{vmin},{vmax}], 直方图16桶={hist}, 前40={vals[:40]}")
+            print(tag, f"[FILL] 折返点数={len(wraps)}, 前5折返处(前值->后值)={winfo}")
 
 
 # ---------------- 金标准参考 (与 kernel arch35 精度模型逐位对齐) ----------------
@@ -99,6 +109,39 @@ def liq_golden():
     return score
 
 
+def formula_sweep(tag, written_set):
+    """候选公式扫描: kernel 写入集合与哪种打分公式的 top-k 吻合, 定位打分链路偏差.
+    证据: ema=200000 触发 3 token (~原始点积 3.3σ), 金标准 std 仅 ~472 (423σ 不可能触发)."""
+    q = query.cpu().float()
+    blk, bs = key.shape[0], key.shape[1]
+    bt = block_table[0].cpu().long()
+    s2 = torch.arange(blk * bs)
+    phys = bt[s2 // bs] * bs + (s2 % bs)
+    k_tokens = key.view(blk * bs, -1).cpu().float()[phys]
+    dot = torch.einsum('tgd,sd->tgs', q, k_tokens)            # 原始 int8 点积, std ~6e4
+    dot_fp16 = dot.to(torch.float16).float()                   # fp16 饱和截断 (无 /1024 时)
+    w = (weights.cpu() * query_dequant_scale.cpu()).float()
+    w_raw = weights.cpu().float()
+    ks = key_dequant_scale.view(blk * bs).cpu().float()[phys]
+    cands = {
+        'dot_g0': dot[0, 0],                                   # 单头原始点积
+        'dot_glast': dot[0, -1],
+        'dot_sum': dot.sum(1)[0],                              # 头求和 (无权重)
+        'dot_sum_x_ks': (dot.sum(1)[0]) * ks,
+        'no_deq_sat': ((w.unsqueeze(2) * dot_fp16).sum(1)[0]) * ks,   # 缺 /1024, fp16 饱和
+        'w_only_no_qs': ((w_raw.unsqueeze(2) * (dot / 1024.0).to(torch.float16).float()).sum(1)[0]) * ks,
+        'ks_only': ks.clone(),
+    }
+    k_top = min(topk, asl_k)
+    parts = []
+    for name, sc in cands.items():
+        sc = sc.clone()
+        sc[asl_k:] = float('-inf')
+        top = set(torch.topk(sc, k_top).indices.tolist())
+        parts.append(f"{name}={len(top & written_set)}")
+    print(f"{tag} [SWEEP] 候选公式 top-k 与写入集合交集: {', '.join(parts)} (金标准基线见[SET])")
+
+
 FAILURES = []
 
 
@@ -113,6 +156,7 @@ def check_topk_vs_golden(tag, out, score):
         inter = len(set(written) & set(ref))
         print(f"{tag} [SET] kernel 写入 {len(written)} 个值 (唯一 {len(set(written))}), "
               f"参考 top{len(ref)} 集合交集 {inter}")
+        formula_sweep(tag, set(written))
     out_idx = out.reshape(-1, out.shape[-1]).cpu()
     for r in range(out_idx.shape[0]):
         oi = out_idx[r].long()
