@@ -70,6 +70,8 @@ if _stage:
                 _hint = f"等于期望的 -{_s:g}f 位型, 阶段门在跑"
             elif _raw == 0x7E7E7E7E:
                 _hint = "哨兵未覆盖 -> kernel 根本没执行入口写入, 跑的是不含调试补丁的旧二进制!"
+            elif _raw == 0x00000000:
+                _hint = "kernel 读到 0.0 -> emaThreshold 字段没进 tiling buffer(截断/未初始化), 对照 [LIQ_TILING] TilingBuf 的 capacity 和 structSize"
             else:
                 _hint = "其他值 -> kernel 读到的 emaThreshold 不是预期值, tiling 数据传递有问题"
             print(f"[LIQ_DEBUG] out[0] = 0x{_raw:08X} (期望 0x{_exp:08X}): {_hint}")

@@ -849,8 +849,23 @@ ge::graphStatus LightningIndexerQuantTiling::DoTiling(LIQTilingInfo *tilingInfo)
     tilingData_.set_kEntryBytes(tilingInfo->kEntryBytes);
     tilingData_.set_tokenSizeBytesK(tilingInfo->tokenSizeBytesK);
     tilingData_.set_usedCoreNum(blockDim);
-    tilingData_.SaveToBuffer(context_->GetRawTilingData()->GetData(), context_->GetRawTilingData()->GetCapacity());
+    // LIQ 调试: STAGE 模式(ema<0)时在老字段 sparseMode 里放魔数,
+    // 绕开 emaThreshold 传递链路, 作为 kernel 入口门的兜底开关
+    if (tilingInfo->emaThreshold < 0.0f) {
+        tilingData_.set_sparseMode(0x5AA5A55AU);
+    }
+    auto liqSaveRet = tilingData_.SaveToBuffer(context_->GetRawTilingData()->GetData(),
+                                               context_->GetRawTilingData()->GetCapacity());
     context_->GetRawTilingData()->SetDataSize(tilingData_.GetDataSize());
+    union {
+        float f;
+        uint32_t u;
+    } liqDbgEmaHost;
+    liqDbgEmaHost.f = tilingInfo->emaThreshold;
+    printf("[LIQ_TILING] TilingBuf: capacity=%lu structSize=%lu saveRet=%d emaBits=0x%08X\n",
+           (unsigned long)context_->GetRawTilingData()->GetCapacity(),
+           (unsigned long)tilingData_.GetDataSize(), (int)liqSaveRet, liqDbgEmaHost.u);
+    fflush(stdout);
 
     // -------------set tilingkey-----------------
     // DT_Q, DT_KV, DT_OUT, PAGE_ATTENTION, FLASH_DECODE, LAYOUT_T, KV_LAYOUT_T

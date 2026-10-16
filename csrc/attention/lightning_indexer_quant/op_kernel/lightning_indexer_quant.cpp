@@ -34,6 +34,9 @@ using namespace LIQKernel;
         if (tiling_data->emaThreshold == LIQCommon::LIQ_DEBUG_STAGE_ENTRY_ONLY) {                            \
             return;                                                                                          \
         }                                                                                                    \
+        if (tiling_data->sparseMode == 0x5AA5A55AU) {                                                        \
+            return;  /* LIQ 调试兜底门: 老字段魔数, emaThreshold 传递异常时仍可提前返回 */                   \
+        }                                                                                                    \
         op.Init(query, key, weights, queryScale, keyScale, actualSeqLengthsQ, actualSeqLengthsK, blocktable, \
                 sparseIndices, user, tiling_data, &tPipe,                                                    \
                 tokenGvaTable, prefetchStagingBuf, prefetchSlotCounter, tokenToPrefetchSlot);                \
