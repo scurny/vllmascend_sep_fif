@@ -253,7 +253,8 @@ __aicore__ inline void LIQVector<LIQT>::InitBuffers(TPipe *pipe)
     if (prefetchCandidateMax_ > 0 && kEntryBytes_ > 0) {
         pipe->InitBuffer(prefetchUbBuf_, kEntryBytes_);
         prefetchUbLocal_ = prefetchUbBuf_.Get<uint8_t>();
-        pipe->InitBuffer(cmpMaskBuf_, 32);
+        // CompareScalar按cuS2Len(≤s2BaseSize_)逐bit写掩码, 需s2BaseSize_/8字节
+        pipe->InitBuffer(cmpMaskBuf_, s2BaseSize_ / 8);
         cmpMaskUb_ = cmpMaskBuf_.Get<uint8_t>();
     }
 }
@@ -353,11 +354,13 @@ __aicore__ inline void LIQVector<LIQT>::PrefetchScoresInVec1(
     uint32_t cmpLenAlign = LIQCommon::Align(cuS2Len, (uint32_t)32);
     AscendC::CompareScalar(cmpMaskUb_, scoresUb, static_cast<float>(constInfo_.emaThreshold),
     AscendC::CMPMODE::GT, cmpLenAlign);
+    PipeBarrier<PIPE_V>();  // 保证bitmask对标量GetValue可见
 
-    // 收集超过阈值的 position
+    // 收集超过阈值的 position; 上限取bitPositions容量, 防止低阈值时候选过多导致栈越界
+    constexpr uint32_t MAX_CANDIDATES_PER_ROW = 256;
     uint32_t validInRow = 0;
-    uint32_t bitPositions [256];  //s2BaseSize 上限 2048, 但单次 cuS2Len <= 2048
-    for (uint32_t j = 0; j < cuS2Len; j++) {
+    uint32_t bitPositions[MAX_CANDIDATES_PER_ROW];
+    for (uint32_t j = 0; j < cuS2Len && validInRow < MAX_CANDIDATES_PER_ROW; j++) {
         if ((cmpMaskUb_.GetValue(j / 8) >> (j % 8)) & 1) {
             bitPositions[validInRow++] = j;
         }
@@ -553,11 +556,12 @@ __aicore__ inline void LIQVector<LIQT>::ProcessVec1(const LIQCommon::RunInfo &in
     for (int32_t ti = 0; ti < myTokenNum; ti++) {
         int32_t tLocal = aivIdx + 2 * ti;
         int32_t cuS1Idx = cuBaseS1Idx + tLocal;
-        // cuRealAcSeq: 当前token对应的AcSeq
+        // cuRealAcSeq: 当前token对应的AcSeq(行有效长度)
         int32_t cuRealAcSeq = info.actS2Size;
         if (constInfo_.attenMaskFlag) {
-            // attenMask true场景
-            cuRealAcSeq = info.actS2Size - (info.actS1Size - cuS1Idx);
+            // attenMask true场景: 因果下三角含对角线位置, 公式与v2 arch35/设计文档/金标准一致
+            // (修复此前缺 +1 的 off-by-one: 旧行有效长度比标准语义少1个位置)
+            cuRealAcSeq = info.actS2Size - info.actS1Size + cuS1Idx + 1;
         }
         int32_t cuS2Len = cuBaseS2Idx + s2BaseSize_ >= cuRealAcSeq ? cuRealAcSeq - cuBaseS2Idx : s2BaseSize_;
         if (cuRealAcSeq > 0 && cuS2Len > 0) {
