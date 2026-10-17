@@ -35,6 +35,8 @@ using namespace LIQServiceVec;
 constexpr uint32_t BASE_TOPK = 2048;
 constexpr uint32_t BASE_TOPK_VALUE_IDX_SIZE = 4096;
 constexpr uint32_t LD_PARAM_NUM = 16;
+constexpr uint32_t COMPARE_SCALAR_ALIGNMENT_BYTES = 256;
+constexpr uint32_t COMPARE_SCALAR_ALIGNMENT_FLOATS = COMPARE_SCALAR_ALIGNMENT_BYTES / sizeof(float);
 
 template <typename LIQT>
 class LIQVector {
@@ -392,7 +394,7 @@ __aicore__ inline void LIQVector<LIQT>::PrefetchScoresInVec1(
 #endif
 
     // CompareScalar: scoresUb > emaThreshold → bitmask
-    uint32_t cmpLenAlign = LIQCommon::Align(cuS2Len, (uint32_t)32);
+    const uint32_t cmpLenAlign = LIQCommon::Align(cuS2Len, COMPARE_SCALAR_ALIGNMENT_FLOATS);
     SetWaitFlag<HardEvent::S_V>(HardEvent::S_V);
     AscendC::CompareScalar(cmpMaskUb_, scoresUb, static_cast<float>(constInfo_.emaThreshold),
     AscendC::CMPMODE::GT, cmpLenAlign);
