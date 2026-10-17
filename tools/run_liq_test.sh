@@ -145,12 +145,17 @@ export LD_LIBRARY_PATH="$vendor_dir/op_api/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PA
 run_logged extension "$python_bin" - <<'PY'
 from pathlib import Path
 
+import torch
+
 from vllm_ascend import vllm_ascend_C
 
 extension = Path(vllm_ascend_C.__file__).resolve()
 print("Torch extension:", extension)
 if extension.parent != (Path.cwd() / "vllm_ascend").resolve():
     raise SystemExit("Loaded an extension outside this checkout; --build-op requires an existing checkout extension, use --build to install it")
+schema = torch.ops._C_ascend.npu_lightning_indexer_quant.default._schema
+if "sparse_values_out" not in {argument.name for argument in schema.arguments}:
+    raise SystemExit("LIQ extension ABI is stale; rerun with --build to rebuild both the extension and custom ops")
 PY
 
 test_command=("$python_bin" -u -X faulthandler "$repo_dir/test_liq.py")

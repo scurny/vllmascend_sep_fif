@@ -145,6 +145,8 @@ void LIQInfoParser::GetOptionalInputParaInfo()
     opParamInfo_.prefetchSlotCounter.desc = context_->GetOptionalInputDesc(PREFETCH_SLOT_COUNTER_INDEX);
     opParamInfo_.tokenToPrefetchSlot.tensor = context_->GetOptionalInputTensor(TOKEN_TO_PREFETCH_SLOT_INDEX);
     opParamInfo_.tokenToPrefetchSlot.desc = context_->GetOptionalInputDesc(TOKEN_TO_PREFETCH_SLOT_INDEX);
+    opParamInfo_.sparseValuesOut.tensor = context_->GetOptionalInputTensor(SPARSE_VALUES_OUT_INDEX);
+    opParamInfo_.sparseValuesOut.desc = context_->GetOptionalInputDesc(SPARSE_VALUES_OUT_INDEX);
 }
 
 void LIQInfoParser::GetInputParaInfo()
@@ -665,6 +667,19 @@ ge::graphStatus LIQInfoParser::ValidateInputShapesMatch()
                OPS_LOG_E(opName_, "output sparse_indices shape last dim must be same as attr sparse_count."),
                return ge::GRAPH_FAILED);
     
+    if (opParamInfo_.sparseValuesOut.tensor != nullptr) {
+        const auto &valuesShape = opParamInfo_.sparseValuesOut.tensor->GetStorageShape();
+        const auto &indicesShape = opParamInfo_.attenOut.shape->GetStorageShape();
+        OPS_ERR_IF(valuesShape.GetDimNum() != indicesShape.GetDimNum(),
+                   OPS_LOG_E(opName_, "sparse_values_out rank must match sparse_indices"),
+                   return ge::GRAPH_FAILED);
+        for (uint32_t dim = 0; dim < valuesShape.GetDimNum(); ++dim) {
+            OPS_ERR_IF(valuesShape.GetDim(dim) != indicesShape.GetDim(dim),
+                       OPS_LOG_E(opName_, "sparse_values_out shape must match sparse_indices"),
+                       return ge::GRAPH_FAILED);
+        }
+    }
+
     //---- ECHO-style prefetch: 要么全传，要么全不传 ----
     uint32_t prefetchInputCnt = 0;
     if (opParamInfo_.tokenGvaTable.tensor != nullptr) prefetchInputCnt++;

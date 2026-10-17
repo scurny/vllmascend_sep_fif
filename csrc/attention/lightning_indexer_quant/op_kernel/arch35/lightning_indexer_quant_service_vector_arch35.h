@@ -59,6 +59,7 @@ public:
                                                   GlobalTensor<float> vec1ResGm, GlobalTensor<int64_t> vec1ParamGm);
     __aicore__ inline void InitVecInputTensor(GlobalTensor<half> weightsGm, GlobalTensor<half> qScaleGm,
                                               GlobalTensor<half> kScaleGm, GlobalTensor<int32_t> indiceOutGm,
+                                              GlobalTensor<float> sparseValueOutGm, bool hasSparseValuesOut,
                                               GlobalTensor<int32_t> blockTableGm);
     // ---- ECHO-style prefetch ----
     __aicore__ inline void InitPrefetchTensors(GlobalTensor<uint64_t> tokenGvaTableGm,
@@ -83,12 +84,14 @@ protected:
     GlobalTensor<half> kScaleGm;
     GlobalTensor<half> vec0OutGm;
     GlobalTensor<int32_t> indiceOutGm;
+    GlobalTensor<float> sparseValueOutGm_;
     GlobalTensor<int32_t> blockTableGm;
     // ---- ECHO-style prefetch GM tensors ----
     GlobalTensor<uint64_t> tokenGvaTableGm_;
     GlobalTensor<uint8_t> prefetchStagingBufGm_;
     GlobalTensor<int32_t> prefetchSlotCounterGm_;
     GlobalTensor<int32_t> tokenToPrefetchSlotGm_;
+    bool hasSparseValuesOut_ = false;
     // =================================常量区=================================
 
 private:
@@ -272,12 +275,16 @@ template <typename LIQT>
 __aicore__ inline void LIQVector<LIQT>::InitVecInputTensor(GlobalTensor<half> weightsGm, GlobalTensor<half> qScaleGm,
                                                            GlobalTensor<half> kScaleGm,
                                                            GlobalTensor<int32_t> indiceOutGm,
+                                                           GlobalTensor<float> sparseValueOutGm,
+                                                           bool hasSparseValuesOut,
                                                            GlobalTensor<int32_t> blockTableGm)
 {
     this->weightsGm = weightsGm;
     this->qScaleGm = qScaleGm;
     this->kScaleGm = kScaleGm;
     this->indiceOutGm = indiceOutGm;
+    this->sparseValueOutGm_ = sparseValueOutGm;
+    this->hasSparseValuesOut_ = hasSparseValuesOut;
     this->blockTableGm = blockTableGm;
 }
 
@@ -529,13 +536,20 @@ __aicore__ inline void LIQVector<LIQT>::FreeEventID()
 template <typename LIQT>
 __aicore__ inline void LIQVector<LIQT>::CleanInvalidOutput(int64_t invalidS1offset)
 {
-    // init -1 and copy to output
     LocalTensor<float> valueULocal = outQueue_.AllocTensor<float>();
     LocalTensor<int32_t> idxULocal1 = valueULocal.template ReinterpretCast<int32_t>();
+    if (hasSparseValuesOut_) {
+        Duplicate(idxULocal1, LIQServiceVec::NEG_INF, constInfo_.sparseCount);
+        PipeBarrier<PIPE_V>();
+        SetWaitFlag<HardEvent::V_MTE3>(HardEvent::V_MTE3);
+        LIQServiceVec::CopyOut(sparseValueOutGm_[invalidS1offset], valueULocal, constInfo_.sparseCount);
+        SetWaitFlag<HardEvent::MTE3_V>(HardEvent::MTE3_V);
+    }
     Duplicate(idxULocal1, constInfo_.INVALID_IDX, constInfo_.sparseCount);
-    outQueue_.EnQue<float>(valueULocal);
-    valueULocal = outQueue_.DeQue<float>();
+    PipeBarrier<PIPE_V>();
+    SetWaitFlag<HardEvent::V_MTE3>(HardEvent::V_MTE3);
     LIQServiceVec::CopyOut(indiceOutGm[invalidS1offset], idxULocal1, constInfo_.sparseCount);
+    SetWaitFlag<HardEvent::MTE3_V>(HardEvent::MTE3_V);
     outQueue_.FreeTensor(valueULocal);
 }
 
@@ -693,17 +707,33 @@ __aicore__ inline void LIQVector<LIQT>::ProcessVec1(const LIQCommon::RunInfo &in
             // 中间结果保存
             bool needCopyWsGm = info.isAllLoopEnd || isS2End;
             if (needCopyOutGm) {
-                LocalTensor<uint32_t> idxULocal = outQueue_.AllocTensor<uint32_t>();
-                ExtractIndex(idxULocal,
-                             globalTopkUb_[innerS1Idx * BASE_TOPK_VALUE_IDX_SIZE].template ReinterpretCast<uint32_t>(),
-                             BASE_TOPK);
-                PipeBarrier<PIPE_V>();
-                InitSortOutBuf(globalTopkUb_[innerS1Idx * BASE_TOPK_VALUE_IDX_SIZE], BASE_TOPK_VALUE_IDX_SIZE);
-                outQueue_.EnQue<uint32_t>(idxULocal);
-                idxULocal = outQueue_.DeQue<uint32_t>();
-                LIQServiceVec::CopyOut(indiceOutGm[info.indiceOutOffset + cuS1Idx * constInfo_.sparseCount],
-                                       idxULocal.template ReinterpretCast<int32_t>(), constInfo_.sparseCount);
-                outQueue_.FreeTensor(idxULocal);
+                int64_t outputOffset = info.indiceOutOffset + cuS1Idx * constInfo_.sparseCount;
+                if (hasSparseValuesOut_) {
+                    LocalTensor<float> outValueUb = tmpBuf_.Get<float>();
+                    LocalTensor<uint32_t> outIdxUb = outValueUb[BASE_TOPK].template ReinterpretCast<uint32_t>();
+                    Extract(outValueUb, outIdxUb, globalTopkUb_[innerS1Idx * BASE_TOPK_VALUE_IDX_SIZE],
+                            BASE_TOPK / 32);
+                    PipeBarrier<PIPE_V>();
+                    SetWaitFlag<HardEvent::V_MTE3>(HardEvent::V_MTE3);
+                    LIQServiceVec::CopyOut(sparseValueOutGm_[outputOffset], outValueUb, constInfo_.sparseCount);
+                    LIQServiceVec::CopyOut(indiceOutGm[outputOffset],
+                                           outIdxUb.template ReinterpretCast<int32_t>(), constInfo_.sparseCount);
+                    SetWaitFlag<HardEvent::MTE3_V>(HardEvent::MTE3_V);
+                    InitSortOutBuf(globalTopkUb_[innerS1Idx * BASE_TOPK_VALUE_IDX_SIZE], BASE_TOPK_VALUE_IDX_SIZE);
+                } else {
+                    LocalTensor<uint32_t> idxULocal = outQueue_.AllocTensor<uint32_t>();
+                    ExtractIndex(
+                        idxULocal,
+                        globalTopkUb_[innerS1Idx * BASE_TOPK_VALUE_IDX_SIZE].template ReinterpretCast<uint32_t>(),
+                        BASE_TOPK);
+                    PipeBarrier<PIPE_V>();
+                    InitSortOutBuf(globalTopkUb_[innerS1Idx * BASE_TOPK_VALUE_IDX_SIZE], BASE_TOPK_VALUE_IDX_SIZE);
+                    outQueue_.EnQue<uint32_t>(idxULocal);
+                    idxULocal = outQueue_.DeQue<uint32_t>();
+                    LIQServiceVec::CopyOut(indiceOutGm[outputOffset],
+                                           idxULocal.template ReinterpretCast<int32_t>(), constInfo_.sparseCount);
+                    outQueue_.FreeTensor(idxULocal);
+                }
             } else if (needCopyWsGm) {
                 // vec1Res Gm = [aic, s1BaseSize_, 2, 2, topkOut_] float32
                 // vec1Param Gm = [aic, s1BaseSize_, 2, 16] int64
@@ -939,6 +969,10 @@ __aicore__ inline void LIQVector<LIQT>::ProcessLD()
         LocalTensor<int32_t> idxULocal1 = outIdxUb.template ReinterpretCast<int32_t>();
         SetWaitFlag<HardEvent::V_MTE3>(HardEvent::V_MTE3);
         SetWaitFlag<HardEvent::S_MTE3>(HardEvent::S_MTE3);
+        if (hasSparseValuesOut_) {
+            DataCopyPad(sparseValueOutGm_[outOffset], outValueUb,
+                        {1, static_cast<uint16_t>(constInfo_.sparseCount * sizeof(float)), 0, 0});
+        }
         DataCopyPad(indiceOutGm[outOffset], idxULocal1,
                     {1, static_cast<uint16_t>(constInfo_.sparseCount * sizeof(int32_t)), 0, 0});
         SetWaitFlag<HardEvent::MTE3_V>(HardEvent::MTE3_V);

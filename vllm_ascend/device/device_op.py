@@ -353,14 +353,9 @@ class BaseDeviceAdaptor:
         enable_sparse_li_c8: bool,
         use_torch_npu_lightning_indexer: bool,
         ema_threshold: float = 0.0,
+        collect_topk_values: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        """Returns (topk_indices, topk_values_or_None).
-        topk_values is None for the enable_sparse_li_c8 path
-        (npu_lightning_indexer_quant does not export scores).
-        Args:
-            ema_threshold: ECHO-style prefetch EMA 阈值. >0 时传入 kernel 用于 prefetch 触发.
-                当前尚未生效，待 prefetch kernel 接入 QuantLightningIndexerV2 后激活.
-        """
+        """Return indices and optional scores in the kernel's prefetch comparison scale."""
         # DSV3.2 currently has graph compilation issues when using torch_npu.npu.lightning_indexer.
         # So two branches are maintained temporarily.
         # TODO: torch.ops._C_ascend.npu_lightning_indexer needs to be removed.
@@ -378,7 +373,12 @@ class BaseDeviceAdaptor:
             _prefetch_kwargs = {}
             try:
                 _mgr = get_sparse_kv_offload_manager()
-                if _mgr is not None and _mgr.token_gva_table_npu is not None:
+                if (
+                    (collect_topk_values or ema_threshold > 0.0)
+                    and _mgr is not None
+                    and (_mgr.tp_rank == 0 or _mgr.rank_local_host_pool)
+                    and _mgr.token_gva_table_npu is not None
+                ):
                     _prefetch_kwargs = dict(
                         token_gva_table=_mgr.token_gva_table_npu,
                         prefetch_staging_buf=_mgr.prefetch_staging_buf,
@@ -391,6 +391,13 @@ class BaseDeviceAdaptor:
                 # manager 没初始化或 A5 上 uint64 创建失败时，降级为不带 prefetch
                 _prefetch_kwargs = {}
 
+            topk_values = None
+            if collect_topk_values:
+                topk_values = torch.empty(
+                    (q_li_shape_ori[0], kv_cache[indexer_cache_idx].shape[2], 2048),
+                    dtype=torch.float32,
+                    device=q_li.device,
+                )
             topk_indices = torch.ops._C_ascend.npu_lightning_indexer_quant(
                 query=q_li.view(q_li_shape_ori),
                 key=kv_cache[indexer_cache_idx],
@@ -406,9 +413,10 @@ class BaseDeviceAdaptor:
                 layout_key="PA_BSND",
                 sparse_count=2048,
                 sparse_mode=3,
+                sparse_values_out=topk_values,
                 **_prefetch_kwargs,
             )
-            return topk_indices, None
+            return topk_indices, topk_values
         elif use_torch_npu_lightning_indexer:
             # TODO (ECHO-prefetch): 切换到 QuantLightningIndexerV2 后传 ema_threshold=ema_threshold
             topk_indices, topk_values = torch_npu.npu_lightning_indexer(
@@ -1352,8 +1360,18 @@ class A5DeviceAdaptor(BaseDeviceAdaptor):
         actual_seq_lengths_key: torch.Tensor,
         enable_sparse_li_c8: bool,
         use_torch_npu_lightning_indexer: bool,
+        ema_threshold: float = 0.0,
+        collect_topk_values: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Returns (topk_indices, topk_values_or_None)."""
+        if enable_sparse_li_c8 and q_li.dtype == torch.int8 and (collect_topk_values or ema_threshold > 0.0):
+            return BaseDeviceAdaptor.indexer_select_post_process(
+                q_li, q_li_scale, q_li_shape_ori, weights, kv_cache,
+                indexer_k_cache_idx, indexer_scale_cache_idx, attn_metadata,
+                actual_seq_lengths_query, actual_seq_lengths_key,
+                enable_sparse_li_c8, use_torch_npu_lightning_indexer,
+                ema_threshold=ema_threshold, collect_topk_values=collect_topk_values,
+            )
         indexer_cache_idx = indexer_k_cache_idx
         indexer_scale_cache_idx = indexer_scale_cache_idx
 

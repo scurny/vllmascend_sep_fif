@@ -48,7 +48,7 @@ using namespace LIQKernel;
         LIQ_PREFETCH_ENTRY_DIAGNOSTICS(tiling_data, tokenGvaTable, prefetchStagingBuf,                      \
                                        prefetchSlotCounter, tokenToPrefetchSlot);                            \
         op.Init(query, key, weights, queryScale, keyScale, actualSeqLengthsQ, actualSeqLengthsK, blocktable, \
-                sparseIndices, user, tiling_data, &tPipe,                                                    \
+                sparseValuesOut, sparseIndices, user, tiling_data, &tPipe,                                   \
                 tokenGvaTable, prefetchStagingBuf, prefetchSlotCounter, tokenToPrefetchSlot);                \
         op.Process();                                                                                        \
     } while (0)
@@ -61,6 +61,7 @@ __global__ __aicore__ void lightning_indexer_quant(__gm__ uint8_t *query, __gm__
                                                    __gm__ uint8_t *prefetchStagingBuf,
                                                    __gm__ uint8_t *prefetchSlotCounter,
                                                    __gm__ uint8_t *tokenToPrefetchSlot,
+                                                   __gm__ uint8_t *sparseValuesOut,
                                                    __gm__ uint8_t *sparseIndices, __gm__ uint8_t *workspace,
                                                    __gm__ uint8_t *tiling)
 {

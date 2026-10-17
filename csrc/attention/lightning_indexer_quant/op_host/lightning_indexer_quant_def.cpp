@@ -81,6 +81,10 @@ public:
         .ParamType(OPTIONAL)
         .DataType({ge::DT_INT32})
         .FormatList({ge::FORMAT_ND});
+        this->Input("sparse_values_out")
+        .ParamType(OPTIONAL)
+        .DataType({ge::DT_FLOAT})
+        .FormatList({ge::FORMAT_ND});
         this->Output ("sparse_indices").ParamType (REQUIRED).DataType ({ge::DT_INT32}).FormatList ({ge::FORMAT_ND});
         this->Attr("query_quant_mode").AttrType(REQUIRED).Int(0);  // 0: 默认值，per-token-head
         this->Attr("key_quant_mode").AttrType(REQUIRED).Int(0);    // 0: 默认值，per-token-head
@@ -162,6 +166,10 @@ public:
         aicore_config_95.Input("token_to_prefetch_slot")
         .ParamType(OPTIONAL)
         .DataType({ge::DT_INT32,ge::DT_INT32,ge::DT_INT32,ge::DT_INT32,ge::DT_INT32})
+        .FormatList({ge::FORMAT_ND});
+        aicore_config_95.Input("sparse_values_out")
+        .ParamType(OPTIONAL)
+        .DataType({ge::DT_FLOAT,ge::DT_FLOAT,ge::DT_FLOAT,ge::DT_FLOAT,ge::DT_FLOAT})
         .FormatList({ge::FORMAT_ND});
         aicore_config_95.Output("sparse_indices")
         .ParamType(REQUIRED)

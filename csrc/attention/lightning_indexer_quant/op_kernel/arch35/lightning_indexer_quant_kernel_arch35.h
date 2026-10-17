@@ -57,7 +57,8 @@ public:
     __aicore__ inline void Init(__gm__ uint8_t *query, __gm__ uint8_t *key, __gm__ uint8_t *weights,
                                 __gm__ uint8_t *queryScale, __gm__ uint8_t *keyScale, __gm__ uint8_t *actualSeqLengthsQ,
                                 __gm__ uint8_t *actualSeqLengthsK, __gm__ uint8_t *blockTable,
-                                __gm__ uint8_t *sparseIndices, __gm__ uint8_t *workspace,
+                                __gm__ uint8_t *sparseValuesOut, __gm__ uint8_t *sparseIndices,
+                                __gm__ uint8_t *workspace,
                                 const LIQTilingData *__restrict tiling, TPipe *tPipe,
                                 // ---- ECHO-style prefetch ----
                                 __gm__ uint8_t *tokenGvaTable = nullptr, __gm__ uint8_t *prefetchStagingBuf = nullptr,
@@ -108,6 +109,8 @@ protected:
     GlobalTensor<half> weightsGm;
 
     GlobalTensor<int32_t> indiceOutGm;
+    GlobalTensor<float> sparseValueOutGm;
+    GlobalTensor<int32_t> sparseValueOutBitsGm;
     GlobalTensor<int32_t> blockTableGm;
 
     GlobalTensor<uint32_t> actualSeqLengthsGmQ;
@@ -118,6 +121,7 @@ protected:
     uint32_t tmpBlockIdx = 0U;
     uint32_t aiCoreIdx = 0U;
     uint32_t usedCoreNum = 0U;
+    bool hasSparseValuesOut_ = false;
 
     LIQCommon::ConstInfo constInfo{};
     TempLoopInfo tempLoopInfo{};
@@ -381,7 +385,8 @@ template <typename LIQT>
 __aicore__ inline void LIQPreload<LIQT>::Init(__gm__ uint8_t *query, __gm__ uint8_t *key, __gm__ uint8_t *weights,
                                               __gm__ uint8_t *queryScale, __gm__ uint8_t *keyScale,
                                               __gm__ uint8_t *actualSeqLengthsQ, __gm__ uint8_t *actualSeqLengthsK,
-                                              __gm__ uint8_t *blockTable, __gm__ uint8_t *sparseIndices,
+                                              __gm__ uint8_t *blockTable, __gm__ uint8_t *sparseValuesOut,
+                                              __gm__ uint8_t *sparseIndices,
                                               __gm__ uint8_t *workspace, const LIQTilingData *__restrict tiling,
                                               TPipe *tPipe,
                                               // ---- ECHO-style prefetch ----
@@ -437,11 +442,17 @@ __aicore__ inline void LIQPreload<LIQT>::Init(__gm__ uint8_t *query, __gm__ uint
     if ASCEND_IS_AIV {
         vectorService.InitParams(constInfo, tiling);
         indiceOutGm.SetGlobalBuffer((__gm__ int32_t *)sparseIndices);
+        hasSparseValuesOut_ = sparseValuesOut != nullptr;
+        if (hasSparseValuesOut_) {
+            sparseValueOutGm.SetGlobalBuffer((__gm__ float *)sparseValuesOut);
+            sparseValueOutBitsGm.SetGlobalBuffer((__gm__ int32_t *)sparseValuesOut);
+        }
         weightsGm.SetGlobalBuffer((__gm__ half *)weights);
         qScaleGm.SetGlobalBuffer((__gm__ half *)queryScale);
         kScaleGm.SetGlobalBuffer((__gm__ half *)keyScale);
         blockTableGm.SetGlobalBuffer((__gm__ int32_t *)blockTable);
-        vectorService.InitVecInputTensor(weightsGm, qScaleGm, kScaleGm, indiceOutGm, blockTableGm);
+        vectorService.InitVecInputTensor(weightsGm, qScaleGm, kScaleGm, indiceOutGm, sparseValueOutGm,
+                                         hasSparseValuesOut_, blockTableGm);
         vectorService.InitVecWorkspaceTensor(weightWorkspaceGm, mm1ResGm, vec1ResGm, vec1ParamGm);
         //---- ECHO-style prefetch: 初始化 prefetch tensor ----
         if (tokenGvaTable != nullptr && prefetchStagingBuf != nullptr &&
@@ -614,6 +625,10 @@ __aicore__ inline void LIQPreload<LIQT>::ProcessInvalid()
                 (baseSize + singleCoreSize <= totalOutputSize) ? singleCoreSize : totalOutputSize - baseSize;
             GlobalTensor<OUT_T> output = indiceOutGm[baseSize];
             AscendC::InitGlobalMemory(output, dealSize, constInfo.INVALID_IDX);
+            if (hasSparseValuesOut_) {
+                GlobalTensor<int32_t> values = sparseValueOutBitsGm[baseSize];
+                AscendC::InitGlobalMemory(values, dealSize, LIQServiceVec::NEG_INF);
+            }
         }
     }
 }

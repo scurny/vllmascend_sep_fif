@@ -209,6 +209,7 @@ class AscendSFAKVOffloadImpl(AscendSFAImpl):
         self.ema_predictor = EMATopkPredictor(topk=self.sfa_sparse_topk)
         self._next_ema_threshold: float | None = None  # 上一轮 EMA 计算的阈值，下次 indexer kernel 使用
         self._prefetch_enabled = True  # 改为 True 激活 ECHO-style prefetch (待 DataCopyPad 验证)
+        self._prefetch_active = False
 
         if self.lru_resident_capacity % self.block_size != 0:
             raise ValueError(
@@ -365,10 +366,39 @@ class AscendSFAKVOffloadImpl(AscendSFAImpl):
         output: torch.Tensor | None = None,
     ) -> torch.Tensor:
         self._current_layer_name = layer_name
+        indexer = self.indexer
+        self._prefetch_active = (
+            self._prefetch_enabled
+            and self.enable_sparse_li_c8
+            and not self.use_fused_overlap
+            and not self.skip_topk
+            and indexer is not None
+            and indexer.c8_k_cache_dtype == torch.int8
+            and attn_metadata is not None
+            and self._is_decode_only(attn_metadata)
+            and not self._in_graph_runtime()
+        )
+        if indexer is not None:
+            indexer._last_topk_values = None
+            indexer._collect_prefetch_scores = self._prefetch_active
+            indexer._injected_ema_threshold = self._next_ema_threshold if self._prefetch_active else None
         try:
             return super().forward(layer_name, hidden_states, kv_cache, attn_metadata, output)
         finally:
+            if indexer is not None:
+                indexer._last_topk_values = None
+                indexer._collect_prefetch_scores = False
+                indexer._injected_ema_threshold = None
+            self._prefetch_active = False
             self._current_layer_name = None
+
+    def _update_prefetch_threshold(self, num_decode_tokens: int) -> None:
+        if not self._prefetch_active or num_decode_tokens == 0 or self.indexer is None:
+            return
+        topk_values = getattr(self.indexer, "_last_topk_values", None)
+        self.indexer._last_topk_values = None
+        if topk_values is not None:
+            self._next_ema_threshold = self.ema_predictor.update(topk_values[:num_decode_tokens])
 
     def _compute_kv_only(
         self,
@@ -424,7 +454,7 @@ class AscendSFAKVOffloadImpl(AscendSFAImpl):
             )
             # ECHO-style prefetch: 在 indexer kernel 运行前准备好 token_gva_table
             # 融合算子不走 indexer prefetch, 跳过 start_prefetch 避免白做 GVA 表构建.
-            if self._prefetch_enabled and not self.use_fused_overlap:
+            if self._prefetch_active:
                 num_reqs = int(getattr(attn_metadata, "num_decodes", 0) or 0)
                 num_decode_tokens = int(getattr(attn_metadata, "num_decode_tokens", 0) or 0)
                 if num_reqs > 0 and num_decode_tokens > 0:
@@ -1073,17 +1103,6 @@ class AscendSFAKVOffloadImpl(AscendSFAImpl):
         manager = get_sparse_kv_offload_manager()
         layer_name = self._offload_layer_name()
 
-        # Inject EMA threshold onto indexer before kernel call (闭环阈值链路)
-        # 融合算子不走 indexer prefetch, 跳过阈值注入避免 kernel 白做 DataCopyPad.
-        if (
-            self._prefetch_enabled
-            and not self.use_fused_overlap
-            and self._next_ema_threshold is not None
-            and hasattr(self, "indexer")
-            and self.indexer is not None
-        ):
-            self.indexer._injected_ema_threshold = self._next_ema_threshold
-
         if num_decode_tokens == 0:
             # Pure prefill batch (colocate debug only).
             _check_device_kv_cache_exist()
@@ -1204,7 +1223,7 @@ class AscendSFAKVOffloadImpl(AscendSFAImpl):
             capturing=self._in_graph_runtime(),
             skip_topk=self.skip_topk,
         )
-        if self._prefetch_enabled and num_decode_tokens > 0:
+        if self._prefetch_active and num_decode_tokens > 0:
             topk_indices_cpu = decode_topk.contiguous().cpu()
             manager.complete_prefetch_staging(
                 topk_indices_cpu=topk_indices_cpu,
@@ -1225,12 +1244,7 @@ class AscendSFAKVOffloadImpl(AscendSFAImpl):
             block_table=resident_block_table,
         )
 
-        # ECHO-style EMA threshold update: 用 indexer 当前 step 输出的 topk scores
-        # 更新 EMA 预测器. indexer.forward 已将 topk_values 保存到 _last_topk_values.
-        if self._prefetch_enabled and hasattr(self, "indexer") and self.indexer is not None:
-            topk_values = getattr(self.indexer, "_last_topk_values", None)
-            if topk_values is not None and topk_values.numel() > 0:
-                self._next_ema_threshold = float(self.ema_predictor.update(topk_values))
+        self._update_prefetch_threshold(num_decode_tokens)
 
         if num_prefills == 0:
             return self._pad_to_input_tokens(decode_attn_output, ql_nope.shape[0])

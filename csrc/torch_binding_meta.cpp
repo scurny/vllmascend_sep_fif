@@ -1584,7 +1584,8 @@ at::Tensor npu_lightning_indexer_quant_meta(
     const c10::optional<at::Tensor> &prefetch_staging_buf,
     const c10::optional<at::Tensor> &prefetch_slot_counter,
     const c10::optional<at::Tensor> &token_to_prefetch_slot,
-    double ema_threshold, int64_t token_size_bytes_k)
+    double ema_threshold, int64_t token_size_bytes_k,
+    const c10::optional<at::Tensor> &sparse_values_out)
 {
     std::string query_layout_str = std::string(layout_query);
     std::string key_layout_str = std::string(layout_key);

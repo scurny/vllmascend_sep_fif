@@ -58,6 +58,7 @@ constexpr uint32_t TOKEN_GVA_TABLE_INDEX = 8;           //token GVA 地址表
 constexpr uint32_t PREFETCH_STAGING_BUF_INDEX = 9;      //prefetch staging buffer
 constexpr uint32_t PREFETCH_SLOT_COUNTER_INDEX = 10;    //prefetch slot 原子计数器
 constexpr uint32_t TOKEN_TO_PREFETCH_SLOT_INDEX = 11;   //token→prefetch_slot 映射
+constexpr uint32_t SPARSE_VALUES_OUT_INDEX = 12;
 constexpr uint32_t LIGHTNING_INDEXER_QUANT = 0;
 // Attributes Index
 constexpr uint32_t ATTR_QUERY_QUANT_MODE_INDEX = 0;
@@ -123,6 +124,7 @@ struct LIQParaInfo {
     TilingOptionalParaInfo prefetchStagingBuf = {nullptr, nullptr};
     TilingOptionalParaInfo prefetchSlotCounter = {nullptr, nullptr};
     TilingOptionalParaInfo tokenToPrefetchSlot = {nullptr, nullptr};
+    TilingOptionalParaInfo sparseValuesOut = {nullptr, nullptr};
     TilingRequiredParaInfo attenOut = {nullptr, nullptr};
 
     const int32_t *queryQuantMode = nullptr;

@@ -30,7 +30,8 @@ at::Tensor npu_lightning_indexer_quant(
     const c10::optional<at::Tensor> &prefetch_staging_buf,
     const c10::optional<at::Tensor> &prefetch_slot_counter,
     const c10::optional<at::Tensor> &token_to_prefetch_slot,
-    double ema_threshold, int64_t token_size_bytes_k)
+    double ema_threshold, int64_t token_size_bytes_k,
+    const c10::optional<at::Tensor> &sparse_values_out)
 {
     auto check_prefetch_tensor = [&](const c10::optional<at::Tensor> &tensor,
                                      const char *name, bool writable) {
@@ -74,6 +75,16 @@ at::Tensor npu_lightning_indexer_quant(
         output_size = {query.size(DIM_0), keyHeadNum, sparse_count};
     }
     at::Tensor lightning_indexer_quant_output = at::empty(output_size, query.options().dtype(at::kInt));
+    if (sparse_values_out.has_value()) {
+        TORCH_CHECK(sparse_values_out->defined(), "sparse_values_out must be a defined tensor");
+        TORCH_CHECK(sparse_values_out->device() == query.device(),
+                    "sparse_values_out must be on the same device as query");
+        TORCH_CHECK(sparse_values_out->scalar_type() == at::kFloat,
+                    "sparse_values_out must have dtype float32");
+        TORCH_CHECK(sparse_values_out->is_contiguous(), "sparse_values_out must be contiguous");
+        TORCH_CHECK(sparse_values_out->sizes() == at::IntArrayRef(output_size),
+                    "sparse_values_out must have the same shape as sparse_indices");
+    }
 
     // convert str
     char *query_layout_ptr = const_cast<char *>(query_layout_str.c_str());
@@ -86,7 +97,7 @@ at::Tensor npu_lightning_indexer_quant(
     int64_t token_size_bytes_k_val = token_size_bytes_k;
     // NOTE: EXEC_NPU_CMD 按位置直接调用生成的 aclnnLightningIndexerQuantGetWorkspaceSize,
     // 参数顺序必须与 op_host/lightning_indexer_quant_def.cpp 中的声明顺序完全一致:
-    // 先全部 inputs(query...block_table + 4 个 prefetch 输入), 再全部 attrs, 最后 output。
+    // 先全部 inputs(query...block_table + 4 个 prefetch 输入 + sparse_values_out), 再 attrs, 最后 output。
     fprintf(stderr,
             "[LIQ_ADPT] before EXEC_NPU_CMD: q=[%ld,%ld,%ld] k=[%ld,%ld,%ld,%ld] layout=%s/%s "
             "sparse_count=%ld sparse_mode=%ld ema=%f tskb=%ld "
@@ -116,6 +127,7 @@ at::Tensor npu_lightning_indexer_quant(
     prefetch_staging_buf,
     prefetch_slot_counter,
     token_to_prefetch_slot,
+    sparse_values_out,
     query_quant_mode,
     key_quant_mode,
     query_layout_ptr,

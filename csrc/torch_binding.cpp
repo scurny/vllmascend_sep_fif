@@ -3709,7 +3709,8 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
         "                            Tensor? prefetch_slot_counter=None, "
         "                            Tensor(b!)? token_to_prefetch_slot=None, "
         "                            float ema_threshold=0.0, "
-        "                            int token_size_bytes_k=0) -> Tensor"
+        "                            int token_size_bytes_k=0, "
+        "                            Tensor(c!)? sparse_values_out=None) -> Tensor"
     );
     ops.impl("npu_lightning_indexer_quant", torch::kPrivateUse1, &vllm_ascend::npu_lightning_indexer_quant);
 

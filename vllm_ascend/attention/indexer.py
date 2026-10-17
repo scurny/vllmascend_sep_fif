@@ -378,10 +378,12 @@ class AscendSFAIndexerBackend(nn.Module, AttentionBackend):
         DSA-CP shards them to the local token shard, matching the sharded
         inputs. ``indexer_metadata`` carries the indexer's own cache view
         plus the parallel-layout values injected by SFA."""
+        self._last_topk_values = None
         k_li, k_li_scale = self.forward_k(k_hidden_states, cos, sin)
         k_li, k_li_scale, slot_mapping = self._gather_cache_inputs(k_li, k_li_scale, indexer_metadata)
         self.write_cache(k_li, k_li_scale, slot_mapping, indexer_attn_metadata=indexer_metadata)
         if not compute_topk:
+            self._injected_ema_threshold = None
             return None
 
         assert self.wk_weights_proj is not None
@@ -459,6 +461,7 @@ class AscendSFAIndexerBackend(nn.Module, AttentionBackend):
             self.enable_sparse_li_c8,
             self.use_torch_npu_lightning_indexer,
             ema_threshold=ema_threshold or 0.0,
+            collect_topk_values=getattr(self, "_collect_prefetch_scores", False),
         )
         # 保存 topk_values 供 ECHO-style prefetch EMA 阈值更新，
         # AscendSFAKVOffloadImpl 在 _execute_sparse_flash_attention_process 中读取.

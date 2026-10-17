@@ -1,5 +1,6 @@
+import math
+
 import torch
-from typing import Optional
 
 class EMATopkPredictor:
     """EMA 预测 indexer 输出的第 k 大 score，用于触发 prefetch。
@@ -29,9 +30,16 @@ class EMATopkPredictor:
         Returns:
             更新后的 EMA 阈值。
         """
-        # 取所有 query 中最小的第 k 大 score（最保守的估计）
-        kth_scores = actual_topk_values.min(dim=-1).values  # [num_queries]
-        actual_kth = kth_scores.min().item()  # scalar: 所有 query 中最小的第 k 大
+        if actual_topk_values.numel() == 0:
+            return self.get_threshold()
+        scores = actual_topk_values[..., : self._topk]
+        scores = scores.masked_fill(scores == -torch.inf, torch.inf)
+        # The current ACLNN threshold is a host float; eager updates require one scalar synchronization.
+        actual_kth = scores.amin().item()
+        if math.isnan(actual_kth):
+            raise ValueError("LIQ TopK scores contain NaN")
+        if actual_kth == math.inf:
+            return self.get_threshold()
         if self._threshold is None:
             self._threshold = actual_kth
         else:
